@@ -125,7 +125,7 @@ def make_orthogonal_kernel(C, k):
     return kernel
 
 
-def expm(M, min_terms=25, *args, **kwargs):
+def expm(M, min_terms=30, *args, **kwargs):
     # Calculates the matrix exponential, works 'batch-wise' with broadcasting
     size = M.shape[-1]
     result = torch.eye(size, device=M.device).reshape(1,size,size)
@@ -151,7 +151,7 @@ def expm_frechet(A, E, adjoint=False):
     result = E
     B = E
     P = E 
-    for k in range(2,26):
+    for k in range(2,31):
         B = (1/k) * torch.matmul(A,B)
         P = (1/k) * torch.matmul(P,A) + B
         result = result + P
@@ -547,7 +547,7 @@ class Stable1x1Block(nn.Module):
         return x
     
 class StandardBlock(nn.Module):
-    def __init__(self, dim, num_in_channels, num_out_channels):
+    def __init__(self, dim, num_in_channels, num_out_channels, zero_init=True):
         super(StandardBlock, self).__init__()
         
         conv_op = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim-1]
@@ -561,8 +561,10 @@ class StandardBlock(nn.Module):
         
         # Initialize the block as the zero transform, such that the coupling becomes
         # the coupling becomes an identity transform (up to permutation of channels)
-        torch.nn.init.zeros_(self.seq[-1].weight)
-        torch.nn.init.zeros_(self.seq[-1].bias)
+        if zero_init:
+            torch.nn.init.zeros_(self.seq[-1].weight)
+            torch.nn.init.zeros_(self.seq[-1].bias)
+            
         
         self.F = nn.Sequential(*self.seq)
         
@@ -571,7 +573,7 @@ class StandardBlock(nn.Module):
     
     
 class DoubleBlock(nn.Module):
-    def __init__(self, dim, num_in_channels, num_out_channels):
+    def __init__(self, dim, num_in_channels, num_out_channels, zero_init=True):
         super(DoubleBlock, self).__init__()
         
         conv_op = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim-1]
@@ -587,8 +589,9 @@ class DoubleBlock(nn.Module):
         self.seq.append(nn.GroupNorm(1, num_out_channels, eps=1e-3)) 
         # Initialize the block as the zero transform, such that the coupling becomes
         # the coupling becomes an identity transform (up to permutation of channels)
-        torch.nn.init.zeros_(self.seq[-1].weight)
-        torch.nn.init.zeros_(self.seq[-1].bias)
+        if zero_init:
+            torch.nn.init.zeros_(self.seq[-1].weight)
+            torch.nn.init.zeros_(self.seq[-1].bias)
         
         self.F = nn.Sequential(*self.seq)
         

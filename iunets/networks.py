@@ -100,28 +100,43 @@ class iUNet(nn.Module):
                     )
                 )
 
+                
+                downsampling = downsampling_op(
+                    get_num_channels(
+                        self.shapes_or_channels[i]
+                    ) // slice_fraction,
+                    learnable=learnable_downsampling
+                )
+
+                upsampling = upsampling_op(
+                    get_num_channels(
+                        self.shapes_or_channels[i]
+                    ) // slice_fraction * (2**dim),
+                    learnable=learnable_downsampling
+                )
+                
+                # Initialize the learnabe upsampling with the same
+                # kernel as the learnable downsampling. This way, by zero-initialization
+                # of the coupling layers, the invertible U-Net is initialized
+                # as the identity function, because
+                if learnable_downsampling:
+                    upsampling.kernel_matrix.data = \
+                        downsampling.kernel_matrix.data
+                
                 self.downsampling_layers.append(
-                    InvertibleModuleWrapper(
-                        downsampling_op(
-                            get_num_channels(
-                                self.shapes_or_channels[i]
-                            ) // slice_fraction,
-                        learnable=learnable_downsampling
-                        ),
+                    InvertibleModuleWrapper(downsampling,
                         disable=disable_custom_gradient
                     )
                 )
+                
                 self.upsampling_layers.append(
-                    InvertibleModuleWrapper(
-                        upsampling_op(
-                            get_num_channels(
-                                self.shapes_or_channels[i]
-                            ) // slice_fraction * (2**dim),
-                        learnable=learnable_downsampling
-                        ),
+                    InvertibleModuleWrapper(upsampling,
                         disable=disable_custom_gradient
                     )
                 )
+
+            
+            
             
             
             self.module_L.append(nn.ModuleList())

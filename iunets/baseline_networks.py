@@ -89,7 +89,18 @@ class StandardUNet(nn.Module):
                               stride=2)
             )
         
-        
+        if self.skip_connection:
+            # We have to convert back to the original number of channels if
+            # we want a skip connection. We do this with an appropriate
+            # convolution.
+            conv_ops = [nn.Conv1d,
+                        nn.Conv2d,
+                        nn.Conv3d]
+            conv_op = conv_ops[self.dim-1]
+            self.output_layer = conv_op(self.base_filters*2,
+                                   self.input_channels,
+                                   3,
+                                   padding=1)
 
 
     def forward(self, input, *args, **kwargs):
@@ -124,6 +135,6 @@ class StandardUNet(nn.Module):
                 x = self.module_R[i][j](x)
 
         if self.skip_connection:
-            x = x + input
+            x = self.output_layer(x) + input
 
         return x
