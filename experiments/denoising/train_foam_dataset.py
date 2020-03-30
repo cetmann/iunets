@@ -214,7 +214,7 @@ START OF ARCHITECTURE DEFINITION
 """
 if use_invertible_unet:
     
-    blowup_layer = nn.Conv3d(1, n_blowup_channels, 1)
+    blowup_layer = torch.nn.Conv3d(1, n_blowup_channels, 3, padding=1)
     iunet = iUNet(n_blowup_channels, # input channels or input shape, must be at least as large as slice_fraction
               dim=3, # 3D data input
               architecture=architecture,
@@ -223,19 +223,28 @@ if use_invertible_unet:
               learnable_downsampling=True, # Otherwise, 3D Haar wavelets are used
               disable_custom_gradient=disable_custom_gradient
               )
-    collapse_layer = nn.Conv3d(n_blowup_channels, 1, 1) 
+    collapse_layer = nn.Conv3d(n_blowup_channels, 1, 1, padding=1) 
     #! For segmentation experiments:
     #! collapse_layer = nn.Conv3d(n_blowup_channels, n_classes, 1)
+    
+    
+    
+    # Initialize the blowup and collapse layers such that the whole iUNet is
+    # initialized as the identity function.
+    
+    blowup_kernel = np.zeros((n_blowup_channels,1,3,3,3),dtype='float32')
+    blowup_kernel[:,:,1,1,1] = 1. / n_blowup_channels
+    blowup_layer.weight.data = torch.tensor(blowup_kernel).data
+    
+    collapse_kernel = np.zeros((1,n_blowup_channels,3,3,3),dtype='float32')
+    collapse_kernel[:,:,1,1,1] = 1. / n_blowup_channels
+    collapse_layer.weight.data = torch.tensor(collapse_kernel).data
     
     model = nn.Sequential(blowup_layer,
                          iunet,
                          collapse_layer).to(device)
     
-    # Initialize the blowup and collapse layers such that the whole iUNet is
-    # initialized as the identity function.
-    blowup_layer.weight.data = torch.ones_like(blowup_layer.weight) / n_blowup_channels
-    collapse_layer.weight.data = torch.ones_like(collapse_layer.weight) / n_blowup_channels
-    
+
     
 
 
@@ -255,7 +264,7 @@ else:
     # no skip connection is used, here we use a linear layer to change the number of
     # channels back.
     if not non_invertible_unet_with_skip_connection:
-        collapse_layer = nn.Conv3d(2*n_blowup_channels, 1, 1)
+        collapse_layer = nn.Conv3d(2*n_blowup_channels, 1, 3, padding=1)
         #! For segmentation experiments:
         #! collapse_layer = nn.Conv3d(2*n_blowup_channels, n_classes, 1)
         module_list.append(collapse_layer)
