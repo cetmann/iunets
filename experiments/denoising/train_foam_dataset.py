@@ -165,7 +165,7 @@ class FoamDataset(Dataset):
         return len(self.file_list)
     
     def __getitem__(self, idx):
-        f = h5py.File(self.file_list[idx])
+        f = h5py.File(self.file_list[idx], 'r')
         x = torch.tensor(f['reconstruction'][:])
         y = torch.tensor(f['volume'][:])
         f.close()
