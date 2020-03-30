@@ -19,7 +19,7 @@ timestamp = ''.join([c for c in str(time.time()) if c!='.'])
 cudnn_convolution = load(name="cudnn_convolution_"+timestamp, 
                          sources=[current_folder+"/conv_ops.cpp"], 
                          verbose=True)
-conv_weight = sys.modules["cudnn_convolution_"+tmp_str].convolution_backward_weight
+conv_weight = sys.modules["cudnn_convolution_"+timestamp].convolution_backward_weight
 print("Done.")
 
 from .utils import calculate_shapes_or_channels, get_num_channels
