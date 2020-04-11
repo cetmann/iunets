@@ -24,6 +24,34 @@ print("Done.")
 
 from .utils import calculate_shapes_or_channels, get_num_channels
 
+def permutation_kernel(dim):
+    """
+    Outputs the kernel for a permutation-based invertible downsampling layer.
+    The same kernel can be used for the invertible upsampling, using the 
+    transposed convolution. Works for any data format (1D, 2D, 3D, 543D,...)
+    """
+    
+    channel_factor = 2**dim
+    
+    kernel_atom_shape = ()
+    for i in range(dim):
+        kernel_atom_shape+= (2,)
+    
+    # We first create zero-kernel-atoms of the appropriate size and then
+    # fill a 1 at the correct place. The index is determined with the help
+    # of a binary representation, e.g. '10' results in a 1 in position [1][0].
+    kernel_atoms = []
+    for i in range(channel_factor):
+        kernel_atom = torch.zeros(kernel_atom_shape)
+        indices_bitstring = ('{0:0'+str(dim)+'b}').format(i)
+        indices = ()
+        for j in range(len(indices_bitstring)):
+            indices+= (int(indices_bitstring[j]),)
+        kernel_atom[indices] = 1
+        kernel_atoms.append(kernel_atom)
+        
+    kernel = torch.stack(kernel_atoms, dim=0).view(channel_factor,1,*([2]*dim))
+    return kernel
 
 def haar_kernel(dim):
     '''
@@ -79,6 +107,8 @@ def haar_kernel(dim):
        
     kernel = torch.stack(kernel_atoms, dim=0).view(channel_factor,1,*([2]*dim))
     return kernel
+
+
 
 
 
@@ -147,7 +177,7 @@ def expm(M, min_terms=30, *args, **kwargs):
 
 def expm_frechet(A, E, adjoint=False):
     # The adjoint of the Frechet derivative of the matrix exponential
-    # of matrix A the Frechet derivative of the transpose of A
+    # of matrix A is the Frechet derivative of the transpose of A
     if adjoint:
         A = A.transpose(-1,-2)    
     
@@ -315,22 +345,26 @@ class InvertibleDownsampling1D(torch.nn.Module):
         super(InvertibleDownsampling1D, self).__init__()
         self.learnable = learnable
         self.input_channels = input_channels
-        if self.learnable:
+        if self.learnable == True:
             self.kernel_matrix = torch.nn.Parameter(torch.randn(input_channels,2,2))
             self.kernel_matrix.requires_grad = True
         else:
+            if learnable == 'permutation':
+                kernel = permutation_kernel(1)
+            else:
+                kernel = haar_kernel(1)
             self.register_buffer(
                 'kernel',
-                haar_kernel(1).repeat(input_channels, 1, 1))
+                kernel.repeat(input_channels, 1, 1))
     
     def forward(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_downsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv1d(x, self.kernel, stride=2, groups=self.input_channels)
     
     def inverse(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_upsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv_transpose1d(x, self.kernel, stride=2, groups=self.input_channels)
@@ -341,21 +375,25 @@ class InvertibleUpsampling1D(torch.nn.Module):
         super(InvertibleUpsampling2D, self).__init__()
         self.learnable = learnable
         self.input_channels = input_channels
-        if self.learnable:
+        if self.learnable == True:
             self.kernel_matrix = torch.nn.Parameter(torch.randn(input_channels//2, 2, 2))
             self.kernel_matrix.requires_grad = True
         else:
+            if learnable == 'permutation':
+                kernel = permutation_kernel(1)
+            else:
+                kernel = haar_kernel(1)
             self.register_buffer('kernel',
-                                 haar_kernel(1).repeat(input_channels//2, 1, 1))
+                                 kernel.repeat(input_channels//2, 1, 1))
     
     def forward(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_upsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv_transpose1d(x, self.kernel, stride=2, groups=self.input_channels//2)
     
     def inverse(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_downsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv1d(x, self.kernel, stride=2, groups=self.input_channels//2)
@@ -368,23 +406,27 @@ class InvertibleDownsampling2D(torch.nn.Module):
         super(InvertibleDownsampling2D, self).__init__()
         self.learnable = learnable
         self.input_channels = input_channels
-        if self.learnable:
+        if self.learnable == True:
             self.kernel_matrix = torch.nn.Parameter(torch.randn(input_channels,4,4))
             self.kernel_matrix.requires_grad = True
         else:
+            if learnable == 'permutation':
+                kernel = permutation_kernel(2)
+            else:
+                kernel = haar_kernel(2)
             self.register_buffer(
                 'kernel',
-                haar_kernel(2).repeat(input_channels, 1, 1, 1))
+                kernel.repeat(input_channels, 1, 1, 1))
             
     
     def forward(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_downsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv2d(x, self.kernel, stride=2, groups=self.input_channels)
     
     def inverse(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_upsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv_transpose2d(x, self.kernel, stride=2, groups=self.input_channels)
@@ -395,21 +437,25 @@ class InvertibleUpsampling2D(torch.nn.Module):
         super(InvertibleUpsampling2D, self).__init__()
         self.learnable = learnable
         self.input_channels = input_channels
-        if self.learnable:
+        if self.learnable == True:
             self.kernel_matrix = torch.nn.Parameter(torch.randn(input_channels//4, 4, 4))
             self.kernel_matrix.requires_grad = True
         else:
+            if learnable == 'permutation':
+                kernel = permutation_kernel(2)
+            else:
+                kernel = haar_kernel(2)
             self.register_buffer('kernel',
-                                 haar_kernel(2).repeat(input_channels//4, 1, 1, 1))
+                                 kernel.repeat(input_channels//4, 1, 1, 1))
     
     def forward(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_upsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv_transpose2d(x, self.kernel, stride=2, groups=self.input_channels//4)
     
     def inverse(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_downsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv2d(x, self.kernel, stride=2, groups=self.input_channels//4)
@@ -423,23 +469,27 @@ class InvertibleDownsampling3D(torch.nn.Module):
         super(InvertibleDownsampling3D, self).__init__()
         self.learnable = learnable
         self.input_channels = input_channels
-        if self.learnable:
+        if self.learnable == True:
             self.kernel_matrix = torch.nn.Parameter(torch.randn(input_channels,8,8))
             self.kernel_matrix.requires_grad = True
         else:
+            if learnable == 'permutation':
+                kernel = permutation_kernel(3)
+            else:
+                kernel = haar_kernel(3)
             self.register_buffer(
                 'kernel',
-                haar_kernel(3).repeat(input_channels, 1, 1, 1, 1))
+                kernel.repeat(input_channels, 1, 1, 1, 1))
             
     
     def forward(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_downsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv3d(x, self.kernel, stride=2, groups=self.input_channels)
     
     def inverse(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_upsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv_transpose3d(x, self.kernel, stride=2, groups=self.input_channels)        
@@ -455,17 +505,21 @@ class InvertibleUpsampling3D(torch.nn.Module):
             self.kernel_matrix = torch.nn.Parameter(torch.randn(input_channels//8, 8, 8))
             self.kernel_matrix.requires_grad = True
         else:
+            if learnable == 'permutation':
+                kernel = permutation_kernel(3)
+            else:
+                kernel = haar_kernel(3)
             self.register_buffer('kernel',
-                                 haar_kernel(3).repeat(input_channels//8, 1, 1, 1, 1))
+                                 kernel.repeat(input_channels//8, 1, 1, 1, 1))
     
     def forward(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_upsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv_transpose3d(x, self.kernel, stride=2, groups=self.input_channels//8)
     
     def inverse(self, x):
-        if self.learnable:
+        if self.learnable == True:
             return invertible_downsampling.apply(self.kernel_matrix, x)
         else:
             return F.conv3d(x, self.kernel, stride=2, groups=self.input_channels//8)
@@ -560,7 +614,13 @@ class StandardBlock(nn.Module):
         self.seq = nn.ModuleList()
         
         self.seq.append(conv_op(num_in_channels, num_out_channels, 3, padding=1, bias=False))
+        torch.nn.init.kaiming_uniform_(self.seq[-1].weight, 
+                                       a=0.01, 
+                                       mode='fan_out', 
+                                       nonlinearity='leaky_relu')
+        
         self.seq.append(nn.LeakyReLU(inplace=True))
+        
         # With groups=1, group normalization becomes layer normalization
         self.seq.append(nn.GroupNorm(1, num_out_channels, eps=1e-3)) 
         
@@ -571,6 +631,30 @@ class StandardBlock(nn.Module):
             torch.nn.init.zeros_(self.seq[-1].bias)
             
         
+        self.F = nn.Sequential(*self.seq)
+        
+    def forward(self, x):
+        return self.F(x)
+    
+
+class BatchNormBlock(nn.Module):
+    def __init__(self, dim, num_in_channels, num_out_channels, zero_init=True):
+        super(BatchNormBlock, self).__init__()
+        
+        conv_op = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim-1]
+        bn_op = [nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d][dim-1]
+        
+        self.seq = nn.ModuleList()
+        
+        self.seq.append(conv_op(num_in_channels, num_out_channels, 3, padding=1, bias=False))
+        torch.nn.init.kaiming_uniform_(self.seq[-1].weight, 
+                                       a=0.01, 
+                                       mode='fan_out', 
+                                       nonlinearity='leaky_relu')
+        
+        self.seq.append(nn.LeakyReLU(inplace=True))
+        
+        self.seq.append(bn_op(num_out_channels, 1e-3)) 
         self.F = nn.Sequential(*self.seq)
         
     def forward(self, x):

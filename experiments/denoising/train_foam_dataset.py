@@ -11,6 +11,7 @@ from skimage.metrics import peak_signal_noise_ratio as calc_psnr
 import iunets
 from iunets.networks import iUNet
 from iunets.baseline_networks import StandardUNet
+from iunets.layers import StandardBlock, BatchNormBlock
 
 
 import h5py
@@ -65,6 +66,10 @@ non_invertible_unet_with_skip_connection = hyperparameters.getboolean(
 disable_custom_gradient = hyperparameters.getboolean(
     'disable_custom_gradient',
     True)
+
+use_batch_norm_for_noninvertible = hyperparameters.getboolean(
+    'use_batch_norm_for_noninvertible',
+    False)
 
 # Whether 
 learnable = hyperparameters.getboolean(
@@ -160,6 +165,7 @@ class FoamDataset(Dataset):
     def __init__(self, file_list, device=None, augment=False):
         self.file_list = file_list
         self.augment = augment
+        self.device = device
         
     def __len__(self):
         return len(self.file_list)
@@ -178,8 +184,8 @@ class FoamDataset(Dataset):
             x, y = augment(x, y)
             
         if device is not None:
-            x = x.to(device)
-            y = y.to(device)
+            x = x.to(self.device)
+            y = y.to(self.device)
             
         return x.contiguous(), y.contiguous()
 
@@ -192,7 +198,7 @@ if folder[-1] != '/':
 # Testing of the remaining 10% not implemented yet, but is the same as validation.
 all_files = sorted([folder + f for f in os.listdir(folder) if '_data.h5' in f])
 train_filenames = all_files[int(.8*len(all_files)):]
-validation_filenames = all_files[int(.8*len(all_files)):int(.9*len(all_files))]
+validation_filenames = all_files[int(.8*len(all_files)):int(.9*len(all_files))][0:1]
 
 
 train_data = FoamDataset(train_filenames,
@@ -235,10 +241,12 @@ if use_invertible_unet:
     blowup_kernel = np.zeros((n_blowup_channels,1,3,3,3),dtype='float32')
     blowup_kernel[:,:,1,1,1] = 1. / n_blowup_channels
     blowup_layer.weight.data = torch.tensor(blowup_kernel).data
+    blowup_layer.to(device)
     
     collapse_kernel = np.zeros((1,n_blowup_channels,3,3,3),dtype='float32')
     collapse_kernel[:,:,1,1,1] = 1. / n_blowup_channels
     collapse_layer.weight.data = torch.tensor(collapse_kernel).data
+    collapse_layer.to(device)
     
     model = nn.Sequential(blowup_layer,
                          iunet,
@@ -251,9 +259,15 @@ if use_invertible_unet:
 
 else:
 
+    if use_batch_norm_for_noninvertible:
+        block = BatchNormBlock
+        print("Using batch normalization...")
+    else:
+        block = StandardBlock
     unet = StandardUNet(1, 
               dim=3,
               base_filters=n_blowup_channels,
+              block_type=block,
               zero_init=not non_invertible_unet_with_skip_connection,
               skip_connection=non_invertible_unet_with_skip_connection)
     
@@ -347,7 +361,7 @@ if os.path.isfile(saved_model_path):
 """
 END OF LOADING SECTION
 """
-
+from time import time
 
 do_validation = True
 while epoch < num_epochs:
@@ -365,6 +379,7 @@ while epoch < num_epochs:
         for i in range(len(validation_data)):
             model.eval()
             with torch.no_grad():
+                
                 x, y = validation_data[i]
                 validation_input = x.detach().cpu().numpy() 
                 fx = model(x)
@@ -429,15 +444,20 @@ while epoch < num_epochs:
     random.shuffle(training_indices)
     for i in training_indices:
         model.train()
-
+        start_time = time()
         x, y = train_data[i]
-
+        print("loading",time()-start_time)
+        
+        start_time=time()
         fx = model(x)
         loss = loss_fn(fx, y)
-        
+        print(loss)
+        print("forward",time()-start_time)
+        start_time=time()
         loss.backward()
         loss_list.append(loss.detach().cpu().numpy())
         optimizer.step()
+        print("train",time()-start_time)
         optimizer.zero_grad()
         
     mean_loss = np.mean(loss_list)
