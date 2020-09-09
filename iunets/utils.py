@@ -26,13 +26,14 @@ def calculate_shapes_or_channels(
             # Copy to list to  prevent changing the original list.
             output_shape = [i for i in input_shape_or_channels] 
 
-            initial_split = (input_shape_or_channels // slice_fraction + input_shape_or_channels%slice_fraction) * slice_fraction
+            initial_split = (input_shape_or_channels // slice_fraction
+                             + input_shape_or_channels%slice_fraction) \
+                            * slice_fraction
             output_shape[0] = (initial_split * 2**(dim*i_level) // 
                 (slice_fraction**i_level))
         if sliced:
             output_shape[0] = output_shape[0] // slice_fraction
-            
-            
+
         resolution_quotient = 2**i_level
         for j in range(1,len(output_shape)):
             output_shape[j] = output_shape[j] // resolution_quotient
@@ -43,37 +44,8 @@ def calculate_shapes_or_channels(
         if i_level == 0:
             return input_shape_or_channels
         else:
-            initial_split = (input_shape_or_channels // slice_fraction + input_shape_or_channels%slice_fraction) * slice_fraction
-            return (initial_split * 2**(dim*i_level) // (slice_fraction**i_level))
-    
-    
-    
-def calculate_shapes_or_channels_old(
-    input_shape_or_channels,
-    slice_fraction,
-    dim,
-    i_level,
-    sliced = False):
-    
-    # If input_shape_or_channels is the input shape
-    if hasattr(input_shape_or_channels,'__iter__'):
-        assert(len(input_shape_or_channels) == dim+1)
-        
-        # Copy to list to  prevent changing the original list.
-        output_shape = [i for i in input_shape_or_channels] 
-        
-        output_shape[0] = (output_shape[0] * 2**(dim*i_level) // 
-            (slice_fraction**i_level))
-        if sliced:
-            output_shape[0] = output_shape[0] // slice_fraction
-            
-            
-        resolution_quotient = 2**i_level
-        for j in range(1,len(output_shape)):
-            output_shape[j] = output_shape[j] // resolution_quotient
-        return output_shape
-    
-    else:
-        # If input_shape_or_channels is just the number of channels
-        return (input_shape_or_channels * 2**(dim*i_level) // 
-            (slice_fraction**i_level))
+            initial_split = (input_shape_or_channels // slice_fraction
+                             + input_shape_or_channels % slice_fraction) \
+                            * slice_fraction
+            return (initial_split * 2**(dim*i_level)
+                    // (slice_fraction**i_level))
