@@ -5,6 +5,7 @@ from typing import (Union,
                     Callable)
 
 import numpy as np
+import torch
 from torch import nn
 from memcnn import InvertibleModuleWrapper
 
@@ -25,17 +26,19 @@ class iUNet(nn.Module):
     """Fully invertible U-Net.
     """
     def __init__(self,
-                 input_shape_or_channels : Union[int, Iterable[int]],
-                 create_module_fn : Callable[..., nn.Module] = create_standard_module,
-                 dim : Union[int, type(None)] = None,
-                 architecture : Iterable[int, ...] = [2,2,2],
-                 slice_fraction : Union[int, type(None)] = None,
-                 learnable_downsampling : bool = True,
-                 disable_custom_gradient : bool = False,
-                 padding_mode : Union[str, type(None)] = 'constant',
-                 padding_value : int = 0,
-                 revert_input_padding : bool = False,
-                 verbose : bool = True,
+                 input_shape_or_channels: Union[int, Iterable[int]],
+                 create_module_fn: Callable[..., nn.Module] = create_standard_module,
+                 dim: Union[int, type(None)] = None,
+                 architecture = [2,2,2],
+                 slice_mode = 'half',
+                 learnable_resampling: bool = True,
+                 resampling_method: str = 'exp',
+                 resampling_init: Union[str, np.ndarray, torch.Tensor] = 'haar',
+                 padding_mode: Union[str, type(None)] = 'constant',
+                 padding_value: int = 0,
+                 revert_input_padding: bool = False,
+                 disable_custom_gradient: bool = False,
+                 verbose: bool = True,
                  *args,
                  **kwargs):
         """
@@ -58,7 +61,7 @@ class iUNet(nn.Module):
                 that slicing and downsampling will altogether result in
                 a doubling of channels. In 3D, `4` should be chosen
                 for the same behavior.
-            learnable_downsampling : Whether to train the invertible
+            learnable_resampling : Whether to train the invertible
                 learnable up- and downsampling or to leave it at the
                 initialized values.
             disable_custom_gradient : If set to True, normal
@@ -74,13 +77,11 @@ class iUNet(nn.Module):
             revert_input_padding : Whether to revert the input padding,
                 if required. When using the iUNet for memory-efficient
                 backpropagation, this can result in non-exact gradients.
-            *args : Arbitrary-length iterable of values. These are passed
-                on to create_module_fn.
+            *args : Arbitrary-length iterable of values.
             **kwargs : Arbitrary-length dictionary of key-value-pairs.
                 These are passed on to create_module_fn.
         """
         super(iUNet, self).__init__()
-        
         self.create_module_fn = create_module_fn
         
         if (dim is None and 
@@ -100,13 +101,20 @@ class iUNet(nn.Module):
 
 
         # Standard behavior of self.slice_fraction
-        if slice_fraction is None:
+        if slice_mode is 'half':
+            if self.dim == 1:
+                pass # TODO throw exception
             # The following results in a doubling of channels at each
-            # downsampling stage for 2D or 3D data, and in constant
-            # number of channels for 1D data.
-            slice_fraction_dict = {1 : 2,
-                                   2 : 2,
+            # downsampling stage for 2D or 3D data
+            slice_fraction_dict = {2 : 2,
                                    3 : 4}
+            slice_fraction = slice_fraction_dict[dim]
+        if slice_mode is 'constant':
+            # The following results in a doubling of channels at each
+            # downsampling stage for 2D or 3D data
+            slice_fraction_dict = {1: 2,
+                                   2: 4,
+                                   3: 8}
             slice_fraction = slice_fraction_dict[dim]
         self.slice_fraction = slice_fraction
         
@@ -121,6 +129,8 @@ class iUNet(nn.Module):
         self.padding_mode = padding_mode
         self.padding_value = padding_value
         self.revert_input_padding = revert_input_padding
+        self.resampling_method = resampling_method
+        self.resampling_init = resampling_init
 
         self.verbose = verbose
 
@@ -144,7 +154,7 @@ class iUNet(nn.Module):
         for i, num_layers in enumerate(architecture):
             
             current_channels = get_num_channels(self.shapes_or_channels[i])
-            if self.verbose:
+            if self.verbose and np.mod(current_channels, 2) == 1:
                 warnings.warn("Odd number of channels detected. Expect faulty "
                     "behaviour.")
             
@@ -173,34 +183,40 @@ class iUNet(nn.Module):
                     get_num_channels(
                         self.shapes_or_channels[i]
                     ) // slice_fraction,
-                    learnable=learnable_downsampling
+                    method=self.resampling_method,
+                    init=self.resampling_init,
+                    learnable=learnable_resampling
                 )
 
                 upsampling = upsampling_op(
                     get_num_channels(
                         self.shapes_or_channels[i]
                     ) // slice_fraction * (2**dim),
-                    learnable=learnable_downsampling
+                    method=self.resampling_method,
+                    init=self.resampling_init,
+                    learnable=learnable_resampling
                 )
                 
-                # Initialize the learnabe upsampling with the same
+                # Initialize the learnable upsampling with the same
                 # kernel as the learnable downsampling. This way, by
                 # zero-initialization  of the coupling layers, the
                 # invertible U-Net is initialized as the identity
                 # function.
-                if learnable_downsampling:
+                if learnable_resampling:
                     upsampling.kernel_matrix.data = \
                         downsampling.kernel_matrix.data
                 
                 self.downsampling_layers.append(
-                    InvertibleModuleWrapper(downsampling,
-                        disable=disable_custom_gradient
+                    InvertibleModuleWrapper(
+                        downsampling,
+                        disable=learnable_resampling
                     )
                 )
                 
                 self.upsampling_layers.append(
-                    InvertibleModuleWrapper(upsampling,
-                        disable=disable_custom_gradient
+                    InvertibleModuleWrapper(
+                        upsampling,
+                        disable=learnable_resampling
                     )
                 )
 
@@ -213,12 +229,11 @@ class iUNet(nn.Module):
                     InvertibleModuleWrapper(
                         create_module_fn(
                                  self.shapes_or_channels[i], 
-                                 self.dim,
-                                 'L', 
-                                 i, 
-                                 j, 
-                                 self.architecture, 
-                                 *args, 
+                                 dim=self.dim,
+                                 LR='R',
+                                 level=i,
+                                 module=j,
+                                 architecture=self.architecture,
                                  **kwargs),
                         disable=disable_custom_gradient
                     )
@@ -228,12 +243,11 @@ class iUNet(nn.Module):
                     InvertibleModuleWrapper(
                         create_module_fn(
                                  self.shapes_or_channels[i], 
-                                 self.dim,
-                                 'R', 
-                                 i, 
-                                 j, 
-                                 self.architecture, 
-                                 *args, 
+                                 dim=self.dim,
+                                 LR='R',
+                                 level=i,
+                                 module=j,
+                                 architecture=self.architecture,
                                  **kwargs),
                         disable=disable_custom_gradient
                     )
@@ -252,23 +266,28 @@ class iUNet(nn.Module):
 
     def padding_reversal(self, x, padding):
         if self.dim == 1:
-            x = x[..., padding[0]:padding[1]]
+            x = x[..., padding[0]:-padding[1]]
         if self.dim == 2:
-            x = x[..., padding[0]:padding[1],
-                       padding[2]:padding[3]]
+            x = x[..., padding[0]:-padding[1],
+                       padding[2]:-padding[3]]
         if self.dim == 3:
-            x = x[..., padding[0]:padding[1],
-                       padding[2]:padding[3],
-                       padding[4]:padding[5]]
+            x = x[..., padding[0]:-padding[1],
+                       padding[2]:-padding[3],
+                       padding[4]:-padding[5]]
         return x
 
     def forward(self, x):
         padded_shape, padding = self.get_padding(x)
         if padded_shape != x.shape[2:] and self.padding_mode is not None:
             if self.verbose:
-                warnings.warning("Input shape XXX cannot be downsampled YYY times without residuals. "
-                    "Padding to shape ZZZ is applied with mode QQQ to retain invertibility. "
-                    "Set padding=None to deactivate padding.")
+                warnings.warn(
+                    "Input resolution " + str(list(x.shape[2:])) +
+                    " cannot be downsampled " + str(len(self.architecture)-1) +
+                    " times without residuals. "
+                    "Padding to resolution " + str(padded_shape) + " is " 
+                    "applied with mode '" + self.padding_mode + "' to retain "
+                    "invertibility. Set padding_mode=None to deactivate "
+                    "padding. If so, expect errors.")
             x = nn.functional.pad(
                     x, padding, self.padding_mode, self.padding_value)
 
@@ -304,9 +323,9 @@ class iUNet(nn.Module):
             for j in range(depth):
                 x = self.module_R[i][j](x)
 
-        if self.padding is not None and self.revert_input_padding:
+        if self.padding_mode is not None and self.revert_input_padding:
             if self.verbose:
-                warnings.warning(
+                warnings.warn(
                     "revert_input_padding is set to True, which may yield "
                     "non-exact reconstructions of the unpadded input."
                 )
@@ -318,7 +337,7 @@ class iUNet(nn.Module):
         padded_shape, padding = self.get_padding(x)
         if padded_shape != x.shape[2:] and self.padding_mode is not None:
             if self.verbose:
-                warnings.warning("Input shape to the inverse mapping "
+                warnings.warn("Input shape to the inverse mapping "
                     "requires padding.")
             x = nn.functional.pad(
                     x, padding, self.padding_mode, self.padding_value)
@@ -353,6 +372,6 @@ class iUNet(nn.Module):
             for j in range(depth-1, -1, -1):
                 x = self.module_L[i][j].inverse(x)
 
-        if self.padding is not None and self.revert_input_padding:
+        if self.padding_mode is not None and self.revert_input_padding:
             x = self.padding_reversal(x, padding)
         return x

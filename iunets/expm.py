@@ -58,7 +58,6 @@ def _compute_scales(A):
     function found in
     https://github.com/cetmann/pytorch_expm/blob/master/determine_frechet_scaling_constant.m
     """
-    global m
     norm = matrix_1_norm(A)
     max_norm = torch.max(norm)
     s = torch.zeros_like(norm)
@@ -114,7 +113,6 @@ def _square(s, R, L=None):
     This works both for the forward as well as the derivative of
     the matrix exponential.
     """
-    global O, I, indices
     s_max = torch.max(s).int()
     if s_max > 0:
         I = _eye_like(R)
@@ -211,7 +209,6 @@ def _expm_frechet_scaling_squaring(A, E, adjoint=False):
 
 
 def _expm_pade(A, m=7):
-    global b, A_4, A_2, b
     assert(m in [3,5,7,9,13])
     
     # The following are values generated as 
@@ -282,8 +279,7 @@ def _expm_pade(A, m=7):
     return R
 
 def _expm_frechet_pade(A, E, m=7):
-        
-    global L_V, b, L_U, U, L_V, L_U, V, U, L_V, L_U, V, U, M_4, A_4, L_V, L_U, V, U, M_2, A_2, b
+
     assert(m in [3,5,7,9,13])
     
     if m == 3:
@@ -375,7 +371,6 @@ def _expm_frechet_pade(A, E, m=7):
         L_V = A_6 @ L_Z1 + M_6 @ Z_1 + L_Z2
 
 
-    
     lu_decom = torch.lu(-U + V)
     exp_A = torch.lu_solve(U + V, *lu_decom)
     dexp_A = torch.lu_solve(L_U + L_V + (L_U - L_V) @ exp_A, *lu_decom)

@@ -7,8 +7,6 @@ from torch.autograd import Function
 
 from typing import Callable, Union, Iterable, Tuple
 
-import memcnn
-from memcnn import InvertibleModuleWrapper, models
 import numpy as np
 
 from .utils import calculate_shapes_or_channels, get_num_channels
@@ -80,15 +78,15 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
     # tbd: Givens, Householder, Bjork, give proper exception.
     assert(method in ['exp', 'cayley']) 
         
-    if init == 'random':
+    if init is 'random':
         return torch.randn(kernel_matrix_shape)
     
-    if init == 'haar' and set(stride) != {2}:
+    if init is 'haar' and set(stride) != {2}:
         print("Initialization 'haar' only available for stride 2.")
         print("Falling back to 'squeeze' transform...")
         init = 'squeeze'
     
-    if init == 'haar' and set(stride) == {2}:
+    if init is 'haar' and set(stride) == {2}:
         if method == 'exp':
             # The following matrices each parametrize the Haar transform when
             # exponentiating the skew symmetric matrix weight-weight.T
@@ -121,7 +119,7 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
             
             return torch.tensor(weight).repeat(num_matrices,1,1)
 
-        elif method == 'cayley':
+        elif method is 'cayley':
             # The following matrices parametrize a Haar kernel matrix
             # when applying the Cayley transform. These can be found by
             # applying an inverse Cayley transform to a Haar kernel matrix.
@@ -159,7 +157,7 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
     # numpy or torch tensor. If only one matrix is provided, this matrix
     # is copied num_matrices times.
     if type(init) is np.ndarray:
-        init = torch.tensor(np.cast(init, dtype))
+        init = torch.tensor(init.astype(dtype))
 
     if torch.is_tensor(init):
         if len(init.shape) == 2:
@@ -206,9 +204,9 @@ class OrthogonalResamplingLayer(torch.nn.Module):
         self.high_channel_number = self.channel_multiplier * low_channel_number
         
         assert(method in ['exp', 'cayley'])
-        if method == 'exp':
+        if method is 'exp':
             self.__calculate_kernel_matrix__ = __calculate_kernel_matrix_exp__
-        elif method == 'cayley':
+        elif method is 'cayley':
             self.__calculate_kernel_matrix__ = __calculate_kernel_matrix_cayley__
         
         self._kernel_matrix_shape = ((self.low_channel_number,)
@@ -330,8 +328,7 @@ class InvertibleDownsampling2D(OrthogonalResamplingLayer):
             **kwargs
         )
 
-        
-    
+
     def forward(self, x):
         # Convolve with stride 2 in order to invertibly downsample.
         return F.conv2d(
@@ -376,9 +373,7 @@ class InvertibleUpsampling2D(OrthogonalResamplingLayer):
         return F.conv2d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number)
     
-    
-    
-    
+
 class InvertibleDownsampling3D(OrthogonalResamplingLayer):
     def __init__(self, 
                  in_channels : int, 
@@ -447,21 +442,14 @@ class InvertibleUpsampling3D(OrthogonalResamplingLayer):
             x, self.kernel, stride=self.stride, groups=self.low_channel_number)
 
 
-
-
-
-
-
-
-
 class SplitChannels(torch.nn.Module):
     def __init__(self, split_location):
         super(SplitChannels, self).__init__()
         self.split_location = split_location
     
     def forward(self, x):
-        a, b = (x[:,:self.split_location], 
-                x[:,self.split_location:])
+        a, b = (x[:, :self.split_location],
+                x[:, self.split_location:])
         a, b = a.clone(), b.clone()
         del x
         return a, b
@@ -480,8 +468,8 @@ class ConcatenateChannels(torch.nn.Module):
         return torch.cat([x, y], dim=1)
     
     def inverse(self, x):
-        a, b = (x[:,:self.split_location], 
-                x[:,self.split_location:])
+        a, b = (x[:, :self.split_location],
+                x[:, self.split_location:])
         a, b = a.clone(), b.clone()
         del x
         return a, b
@@ -526,26 +514,39 @@ class StandardAdditiveCoupling(nn.Module):
 
     
 class StandardBlock(nn.Module):
-    def __init__(self, dim, num_in_channels, num_out_channels, zero_init=True):
+    def __init__(self,
+                 dim,
+                 num_in_channels,
+                 num_out_channels,
+                 block_depth = 1,
+                 zero_init=True):
         super(StandardBlock, self).__init__()
         
         conv_op = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim-1]
         
         self.seq = nn.ModuleList()
+
+        for i in range(block_depth):
+            self.seq.append(
+                conv_op(
+                    num_in_channels,
+                    num_out_channels,
+                    3,
+                    padding=1,
+                    bias=False))
+            torch.nn.init.kaiming_uniform_(self.seq[-1].weight,
+                                           a=0.01,
+                                           mode='fan_out',
+                                           nonlinearity='leaky_relu')
+
+            self.seq.append(nn.LeakyReLU(inplace=True))
         
-        self.seq.append(conv_op(num_in_channels, num_out_channels, 3, padding=1, bias=False))
-        torch.nn.init.kaiming_uniform_(self.seq[-1].weight, 
-                                       a=0.01, 
-                                       mode='fan_out', 
-                                       nonlinearity='leaky_relu')
+            # With groups=1, group normalization becomes layer normalization
+            self.seq.append(nn.GroupNorm(1, num_out_channels, eps=1e-3))
         
-        self.seq.append(nn.LeakyReLU(inplace=True))
-        
-        # With groups=1, group normalization becomes layer normalization
-        self.seq.append(nn.GroupNorm(1, num_out_channels, eps=1e-3)) 
-        
-        # Initialize the block as the zero transform, such that the coupling becomes
-        # the coupling becomes an identity transform (up to permutation of channels)
+        # Initialize the block as the zero transform, such that the coupling
+        # becomes the coupling becomes an identity transform (up to permutation
+        # of channels)
         if zero_init:
             torch.nn.init.zeros_(self.seq[-1].weight)
             torch.nn.init.zeros_(self.seq[-1].bias)
@@ -557,10 +558,18 @@ class StandardBlock(nn.Module):
         return self.F(x)
     
 
-def create_standard_module(input_shape_or_channels, dim, LR, i, j, architecture, *args, **kwargs):
+def create_standard_module(input_shape_or_channels, *args, **kwargs):
+
+    dim = kwargs.pop('dim', 2)
+    block_depth = kwargs.pop('block_depth', 1)
     num_channels = get_num_channels(input_shape_or_channels)
     num_F_in_channels = num_channels // 2
     num_F_out_channels = num_channels - num_F_in_channels
     return StandardAdditiveCoupling(
-        F=StandardBlock(dim, num_F_in_channels, num_F_out_channels), channel_split_pos=num_F_out_channels
+        F=StandardBlock(
+            dim,
+            num_F_in_channels,
+            num_F_out_channels,
+            block_depth = block_depth),
+        channel_split_pos=num_F_out_channels
         )
