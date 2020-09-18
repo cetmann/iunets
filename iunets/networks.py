@@ -1,6 +1,6 @@
 import warnings
 
-from typing import Union, Iterable, Callable, Any, Tuple
+from typing import Union, Iterable, Callable, Any, Tuple, Sized, List, Optional
 
 import numpy as np
 import torch
@@ -31,15 +31,14 @@ class iUNet(nn.Module):
         channel. Can also be the complete input shape (without batch dimension).
     :param architecture:
         Determines the number of invertible layers at each
-        resolution (both left and right), e.g. ``(2,3,4)`` results in the
+        resolution (both left and right), e.g. ``[2,3,4]`` results in the
         following structure::
             2-----2
              3---3
               4-4
 
-    :param dim: Either ``1``, ``2`` or ``3``, depending on the data. If
-        ``None``, it is inferred from `input_channels`, if `input_channels`
-        is the whole shape of the data.
+    :param dim: Either ``1``, ``2`` or ``3``, signifying whether a 1D, 2D or 3D
+        invertible U-Net should be created.
     :param create_module_fn:
         Function which outputs an invertible layer. This layer
         should be a ``torch.nn.Module`` with a method ``forward(*x)``
@@ -48,15 +47,19 @@ class iUNet(nn.Module):
         Additional keyword arguments passed on via ``kwargs`` are
         ``dim`` (whether this is a 1D, 2D or 3D iUNet), the coordinates
         of the specific module within the iUNet (``LR``, ``level`` and
-        ``module``) as well as ``architecture``.
+        ``module``) as well as ``architecture``. By default, this creates an
+        additive coupling layer, whose block consists of a number of
+        convolutional layers, followed by a `leaky ReLU` activation function
+        and an instance normalization layer. The number of blocks can be
+        controlled by setting ``"block_depth"`` in ``module_kwargs``.
     :param module_kwargs:
         ``dict`` of optional, additional keyword arguments that are
         passed on to ``create_module_fn``.
     :param slice_mode:
         Controls the fraction of channels, which gets invertibly
         downsampled. Together with invertible downsampling
-        Currently supported modes: ``"half"``, ``"constant"``.
-        Defaults to ``"half"``.
+        Currently supported modes: ``"double"``, ``"constant"``.
+        Defaults to ``"double"``.
     :param learnable_resampling:
         Whether to train the invertible learnable up- and downsampling
         or to leave it at the initialized values.
@@ -107,18 +110,19 @@ class iUNet(nn.Module):
         Defaults to ``1``.
     """
     def __init__(self,
-                 input_channels: Union[int, Iterable[int]],
+                 input_channels: int,
                  architecture: Tuple[int, ...],
-                 dim: int = None,
-                 create_module_fn: Callable[..., nn.Module] = create_standard_module,
+                 dim: int,
+                 create_module_fn: Callable[[int, Optional[dict]], nn.Module]
+                    = create_standard_module,
                  module_kwargs: dict = None,
-                 slice_mode: str = 'half',
+                 slice_mode: str = "double",
                  learnable_resampling: bool = True,
                  resampling_stride: int = 2,
-                 resampling_method: str = 'exp',
-                 resampling_init: Union[str, np.ndarray, torch.Tensor] = 'haar',
+                 resampling_method: str = "exp",
+                 resampling_init: Union[str, np.ndarray, torch.Tensor] = "haar",
                  resampling_kwargs: dict = None,
-                 padding_mode: Union[str, type(None)] = 'constant',
+                 padding_mode: Union[str, type(None)] = "constant",
                  padding_value: int = 0,
                  revert_input_padding: bool = False,
                  disable_custom_gradient: bool = False,
@@ -126,64 +130,71 @@ class iUNet(nn.Module):
                  **kwargs: Any):
 
         super(iUNet, self).__init__()
-        self.create_module_fn = create_module_fn
 
-        if dim is None and not hasattr(input_channels, '__iter__'):
-            raise AttributeError(
-                "input_channels must be either the full shape  of the input "
-                "(minus batch dimension) OR just the number  of channels, in "
-                "which case dim has to be provided.")
-        
-        if hasattr(input_channels,'__len__'):
-            dim = len(input_channels) - 1
-
-        self.dim = dim
         self.architecture = architecture
+        self.dim = dim
+        self.create_module_fn = create_module_fn
         self.disable_custom_gradient = disable_custom_gradient
         self.num_levels = len(architecture)
         if module_kwargs is None:
             module_kwargs = {}
         self.module_kwargs = module_kwargs
 
-        # Standard behavior of self.slice_mode
-        if slice_mode is "half":
-            if self.dim == 1:
-                raise AttributeError(
-                    "slice_mode='half' not possible in 1D.")
-            # The following results in a doubling of channels at each
-            # downsampling stage for 2D or 3D data
-            slice_fraction_dict = {2: 2,
-                                   3: 4}
-            slice_fraction = slice_fraction_dict[dim]
-        if slice_mode is "constant":
-            # The following results in a doubling of channels at each
-            # downsampling stage for 2D or 3D data
-            slice_fraction_dict = {1: 2,
-                                   2: 4,
-                                   3: 8}
-            slice_fraction = slice_fraction_dict[dim]
-        
-        # Calculate the shapes of each level a priori
-        self.shapes_or_channels = [calculate_shapes_or_channels(
-            input_channels,
-            slice_fraction,
-            dim,
-            i_level)
-            for i_level in range(self.num_levels)]
+        self.channels = [input_channels]
+        self.channels_before_downsampling = []
+        self.skipped_channels = []
 
-        # Padding attributes
+        # --- Padding attributes ---
         self.padding_mode = padding_mode
         self.padding_value = padding_value
         self.revert_input_padding = revert_input_padding
 
-        assert(resampling_stride==2)
-        self.resampling_stride = resampling_stride
+        # --- Invertible up- and downsampling attributes ---
+        # Reformat resampling_stride to the standard format
+        self.resampling_stride = self.__format_stride__(resampling_stride)
+        # Calculate the channel multipliers per downsampling operation
+        self.channel_multipliers = [
+            int(np.prod(stride)) for stride in self.resampling_stride
+        ]
         self.resampling_method = resampling_method
         self.resampling_init = resampling_init
         if resampling_kwargs is None:
             resampling_kwargs = {}
         self.resampling_kwargs = resampling_kwargs
+        # Calculate the total downsampling factor per spatial dimension
+        self.downsampling_factors = self.__total_downsampling_factor__(
+            self.resampling_stride
+        )
 
+        # Standard behavior of self.slice_mode
+        if slice_mode is "double" or slice_mode is "constant":
+            if slice_mode is "double": factor = 2
+            if slice_mode is "constant": factor = 1
+
+            for i in range(len(architecture)-1):
+                self.skipped_channels.append(
+                    int(
+                        max([1, np.floor(
+                                (self.channels[i] *
+                                 (self.channel_multipliers[i] - factor))
+                                / self.channel_multipliers[i])]
+                            )
+                    )
+                )
+                self.channels_before_downsampling.append(
+                        self.channels[i] - self.skipped_channels[-1]
+                )
+                self.channels.append(
+                    self.channel_multipliers[i]
+                    * self.channels_before_downsampling[i]
+                )
+        else:
+            raise AttributeError(
+                "Currently, only slice_mode='double' and 'constant' are "
+                "supported."
+            )
+
+        # Verbosity level
         self.verbose = verbose
 
         # Create the architecture of the iUNet
@@ -204,18 +215,14 @@ class iUNet(nn.Module):
 
         for i, num_layers in enumerate(architecture):
             
-            current_channels = get_num_channels(self.shapes_or_channels[i])
-            if self.verbose and np.mod(current_channels, 2) == 1:
-                warnings.warn(
-                    "Odd number of channels detected. Expect faulty behaviour."
-                )
+            current_channels = self.channels[i]
 
             if i < len(architecture)-1:
+                # Slice and concatenation layers
                 self.slice_layers.append(
                     InvertibleModuleWrapper(
                         SplitChannels(
-                            current_channels
-                            - current_channels // slice_fraction
+                            self.skipped_channels[i]
                         ),
                         disable=disable_custom_gradient
                     )
@@ -223,18 +230,16 @@ class iUNet(nn.Module):
                 self.concat_layers.append(
                     InvertibleModuleWrapper(
                         ConcatenateChannels(
-                            current_channels
-                            - current_channels // slice_fraction
+                            self.skipped_channels[i]
                         ),
                         disable=disable_custom_gradient
                     )
                 )
 
+                # Upsampling and downsampling layers
                 downsampling = downsampling_op(
-                    get_num_channels(
-                        self.shapes_or_channels[i]
-                    ) // slice_fraction,
-                    stride=self.resampling_stride,
+                    self.channels_before_downsampling[i],
+                    stride=self.resampling_stride[i],
                     method=self.resampling_method,
                     init=self.resampling_init,
                     learnable=learnable_resampling,
@@ -242,10 +247,8 @@ class iUNet(nn.Module):
                 )
 
                 upsampling = upsampling_op(
-                    get_num_channels(
-                        self.shapes_or_channels[i]
-                    ) // slice_fraction * (2**dim),
-                    stride=self.resampling_stride,
+                    self.channels[i+1],
+                    stride=self.resampling_stride[i],
                     method=self.resampling_method,
                     init=self.resampling_init,
                     learnable=learnable_resampling,
@@ -283,7 +286,7 @@ class iUNet(nn.Module):
                 self.module_L[i].append(
                     InvertibleModuleWrapper(
                         create_module_fn(
-                                 self.shapes_or_channels[i], 
+                                 self.channels[i],
                                  dim=self.dim,
                                  LR='R',
                                  level=i,
@@ -297,7 +300,7 @@ class iUNet(nn.Module):
                 self.module_R[i].append(
                     InvertibleModuleWrapper(
                         create_module_fn(
-                                 self.shapes_or_channels[i], 
+                                 self.channels[i],
                                  dim=self.dim,
                                  LR='R',
                                  level=i,
@@ -308,17 +311,30 @@ class iUNet(nn.Module):
                     )
                 )
 
-    def get_padding(self, x):
+    def get_padding(self, x: torch.Tensor):
+        """Calculates the required padding for the input.
+
+        """
         shape = x.shape[2:]
-        f = 2 ** (len(self.architecture) - 1)
-        padded_shape = [int(np.ceil(s / f)) * f for s in shape]
+        factors = self.downsampling_factors
+        padded_shape = [
+            int(np.ceil(s / f)) * f for (s,f) in zip(shape, factors)
+        ]
         total_padding = [p - s for (s, p) in zip(shape, padded_shape)]
+
+        # Pad evenly on all sides
         padding = [None] * (2 * len(shape))
         padding[::2] = [p // 2 for p in total_padding]
         padding[1::2] = [p - p // 2 for p in total_padding]
         return padded_shape, padding
 
-    def padding_reversal(self, x, padding):
+    def revert_padding(self, x: torch.Tensor, padding: List[int]):
+        """Reverses a given padding.
+        :param x:
+            The image that was originally padded.
+        :param padding:
+            The padding that is removed from ``x``.
+        """
         if self.dim == 1:
             x = x[...,
                   padding[0]:-padding[1]]
@@ -335,10 +351,22 @@ class iUNet(nn.Module):
 
     def __check_stride_format__(self, stride):
         """Check whether the stride has the correct format to be parsed.
+
+        The format can be either a single integer, a single tuple (where the
+        length corresponds to the spatial dimensions of the data), or a list
+        containing either of the last two options (where the length of the
+        list has to be equal to the number of downsampling operations),
+        e.g. ``2`, ``(2,1,3)``, ``[(2,1,3), (2,2,2), (4,3,1)]``.
         """
-        def raise_error():
+        def raise_format_error():
             raise AttributeError(
-                "resampling_stride has the wrong format."
+                "resampling_stride has the wrong format. "
+                "The format can be either a single integer, a single tuple "
+                "(where the length corresponds to the spatial dimensions of the "
+                "data), or a list containing either of the last two options "
+                "(where the length of the list has to be equal to the number "
+                "of downsampling operations), e.g. 2, (2,1,3), "
+                "[(2,1,3), (2,2,2), (4,3,1)]. "
             )
         if isinstance(stride, int):
             pass
@@ -347,18 +375,19 @@ class iUNet(nn.Module):
                 for element in stride:
                     self.__check_stride_format__(element)
             else:
-                raise_error()
+                raise_format_error()
         elif isinstance(stride, list):
             if len(stride) == self.num_levels-1:
                 for element in stride:
                     self.__check_stride_format__(element)
             else:
-                raise_error()
+                raise_format_error()
         else:
-            raise_error()
+            raise_format_error()
 
     def __format_stride__(self, stride):
-        """Parses the resampling_stride.
+        """Parses the resampling_stride and reformats it into a standard format.
+
         """
         self.__check_stride_format__(stride)
         if isinstance(stride, int):
@@ -371,8 +400,17 @@ class iUNet(nn.Module):
                     stride[i] = (element,) * self.dim
             return stride
 
+    def __total_downsampling_factor__(self, stride):
+        factors = [1] * len(stride[0])
+        for i, element_tuple in enumerate(stride):
+            for j, element_int in enumerate(stride[i]):
+                factors[j] = factors[j] * element_int
+        return tuple(factors)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor):
+        """Applies the forward mapping of the iUNet to ``x``.
+
+        """
         padded_shape, padding = self.get_padding(x)
         if padded_shape != x.shape[2:] and self.padding_mode is not None:
             if self.verbose:
@@ -420,15 +458,12 @@ class iUNet(nn.Module):
                 x = self.module_R[i][j](x)
 
         if self.padding_mode is not None and self.revert_input_padding:
-            if self.verbose:
-                warnings.warn(
-                    "revert_input_padding is set to True, which may yield "
-                    "non-exact reconstructions of the unpadded input."
-                )
-            x = self.padding_reversal(x, padding)
+            x = self.revert_padding(x, padding)
         return x
     
-    def inverse(self, x):
+    def inverse(self, x: torch.Tensor):
+        """Applies the inverse of the iUNet to ``x``.
+        """
 
         padded_shape, padding = self.get_padding(x)
         if padded_shape != x.shape[2:] and self.padding_mode is not None:
@@ -470,6 +505,11 @@ class iUNet(nn.Module):
                 x = self.module_L[i][j].inverse(x)
 
         if self.padding_mode is not None and self.revert_input_padding:
-            x = self.padding_reversal(x, padding)
+            if self.verbose:
+                warnings.warn(
+                    "revert_input_padding is set to True, which may yield "
+                    "non-exact reconstructions of the unpadded input."
+                )
+            x = self.revert_padding(x, padding)
         return x
 
