@@ -26,7 +26,7 @@ class iUNet(nn.Module):
     This model can be used for memory-efficient backpropagation, e.g. in
     high-dimensional (such as 3D) segmentation tasks.
 
-    :param input_channels:
+    :param in_channels:
         The number of input channels, which is then also the number of output
         channels. Can also be the complete input shape (without batch
         dimension).
@@ -44,7 +44,7 @@ class iUNet(nn.Module):
         Function which outputs an invertible layer. This layer
         should be a ``torch.nn.Module`` with a method ``forward(*x)``
         and a method ``inverse(*x)``. ``create_module_fn`` should have the
-        signature ``create_module_fn(input_channels, **kwargs)``.
+        signature ``create_module_fn(in_channels, **kwargs)``.
         Additional keyword arguments passed on via ``kwargs`` are
         ``dim`` (whether this is a 1D, 2D or 3D iUNet), the coordinates
         of the specific module within the iUNet (``LR``, ``level`` and
@@ -109,17 +109,15 @@ class iUNet(nn.Module):
         is the value that the input is padded with, e.g. 0.
         Defaults to ``0``.
     :param revert_input_padding:
-        Whether to revert the input padding, if required. When using the
-        iUNet for memory-efficient
-        backpropagation, this can result in non-exact gradients.
-        Defaults to ``False``.
+        Whether to revert the input padding in the output, if desired.
+        Defaults to ``True``.
     :param verbose:
         Level of verbosity. Currently only 0 (no warnings) or 1,
         which includes warnings.
         Defaults to ``1``.
     """
     def __init__(self,
-                 input_channels: int,
+                 in_channels: int,
                  architecture: Tuple[int, ...],
                  dim: int,
                  create_module_fn: Callable[[int, Optional[dict]], nn.Module]
@@ -133,7 +131,7 @@ class iUNet(nn.Module):
                  resampling_kwargs: dict = None,
                  padding_mode: Union[str, type(None)] = "constant",
                  padding_value: int = 0,
-                 revert_input_padding: bool = False,
+                 revert_input_padding: bool = True,
                  disable_custom_gradient: bool = False,
                  verbose: int = 1,
                  **kwargs: Any):
@@ -149,7 +147,7 @@ class iUNet(nn.Module):
             module_kwargs = {}
         self.module_kwargs = module_kwargs
 
-        self.channels = [input_channels]
+        self.channels = [in_channels]
         self.channels_before_downsampling = []
         self.skipped_channels = []
 
@@ -291,30 +289,29 @@ class iUNet(nn.Module):
             self.module_R.append(nn.ModuleList())
             
             for j in range(num_layers):
-                
+                coordinate_kwargs = {
+                    'dim': self.dim,
+                    'LR': 'L',
+                    'level': i,
+                    'module_index': j,
+                    'architecture': self.architecture,
+                }
                 self.module_L[i].append(
                     InvertibleModuleWrapper(
                         create_module_fn(
                                  self.channels[i],
-                                 dim=self.dim,
-                                 LR='L',
-                                 level=i,
-                                 module_index=j,
-                                 architecture=self.architecture,
+                                 **coordinate_kwargs,
                                  **module_kwargs),
                         disable=disable_custom_gradient
                     )
                 )
-                
+
+                coordinate_kwargs['LR'] = 'R'
                 self.module_R[i].append(
                     InvertibleModuleWrapper(
                         create_module_fn(
                                  self.channels[i],
-                                 dim=self.dim,
-                                 LR='R',
-                                 level=i,
-                                 module_index=num_layers-j,
-                                 architecture=self.architecture,
+                                 **coordinate_kwargs,
                                  **module_kwargs),
                         disable=disable_custom_gradient
                     )
@@ -352,17 +349,18 @@ class iUNet(nn.Module):
             The padding that is removed from ``x``.
         """
         if self.dim == 1:
-            x = x[...,
+            x = x[:, :,
                   padding[0]:-padding[1]]
         if self.dim == 2:
-            x = x[...,
-                  padding[0]:-padding[1],
-                  padding[2]:-padding[3]]
-        if self.dim == 3:
-            x = x[...,
-                  padding[0]:-padding[1],
+            x = x[:, :,
                   padding[2]:-padding[3],
-                  padding[4]:-padding[5]]
+                  padding[0]:-padding[1]]
+        if self.dim == 3:
+            x = x[:, :,
+                  padding[4]:-padding[5],
+                  padding[2]:-padding[3],
+                  padding[0]:-padding[1]]
+
         return x
 
     def __check_stride_format__(self, stride):
@@ -426,16 +424,19 @@ class iUNet(nn.Module):
     def forward(self, x: torch.Tensor):
         """Applies the forward mapping of the iUNet to ``x``.
         """
+        if not x.shape[1] == self.channels[0]:
+            raise RuntimeError(
+                "The number of channels does not match in_channels."
+            )
         padded_shape, padding = self.get_padding(x)
         if padded_shape != x.shape[2:] and self.padding_mode is not None:
             if self.verbose:
                 warnings.warn(
-                    "Input resolution {} cannot be downsampled {}" 
-                    " times without residuals. "
-                    "Padding to resolution {} is " 
-                    "applied with mode {} to retain "
-                    "invertibility. Set padding_mode=None to deactivate "
-                    "padding. If so, expect errors.".format(
+                    "Input resolution {} cannot be downsampled {}  times "
+                    "without residuals. Padding to resolution {} is  applied "
+                    "with mode {} to retain invertibility. Set "
+                    "padding_mode=None to deactivate padding. If so, expect "
+                    "errors.".format(
                             list(x.shape[2:]),
                             len(self.architecture)-1,
                             padded_shape,
@@ -444,7 +445,8 @@ class iUNet(nn.Module):
                     )
 
             x = nn.functional.pad(
-                    x, padding, self.padding_mode, self.padding_value)
+                x, padding, self.padding_mode, self.padding_value
+            )
 
         # skip_inputs is a list of the skip connections
         skip_inputs = []
@@ -484,8 +486,6 @@ class iUNet(nn.Module):
     def inverse(self, x: torch.Tensor):
         """Applies the inverse of the iUNet to ``x``.
         """
-
-        print("Applying inverse of network")
 
         padded_shape, padding = self.get_padding(x)
         if padded_shape != x.shape[2:] and self.padding_mode is not None:

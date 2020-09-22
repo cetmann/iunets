@@ -399,14 +399,17 @@ class StandardBlock(nn.Module):
         conv_op = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim - 1]
 
         self.seq = nn.ModuleList()
+        self.num_in_channels = num_in_channels
+        self.num_out_channels = num_out_channels
 
         for i in range(block_depth):
 
             current_in_channels = max(num_in_channels, num_out_channels)
             current_out_channels = max(num_in_channels, num_out_channels)
+
             if i == 0:
                 current_in_channels = num_in_channels
-            elif i == block_depth-1:
+            if i == block_depth-1:
                 current_out_channels = num_out_channels
 
             self.seq.append(
@@ -436,13 +439,14 @@ class StandardBlock(nn.Module):
         self.F = nn.Sequential(*self.seq)
 
     def forward(self, x):
-        return self.F(x)
+        x = self.F(x)
+        return x
 
 
-def create_standard_module(input_shape_or_channels, *args, **kwargs):
+def create_standard_module(in_channels, **kwargs):
     dim = kwargs.pop('dim', 2)
     block_depth = kwargs.pop('block_depth', 1)
-    num_channels = get_num_channels(input_shape_or_channels)
+    num_channels = get_num_channels(in_channels)
     num_F_in_channels = num_channels // 2
     num_F_out_channels = num_channels - num_F_in_channels
 
