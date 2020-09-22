@@ -17,7 +17,7 @@ from .layers import (create_standard_module,
                      SplitChannels,
                      ConcatenateChannels)
 
-from .utils import calculate_shapes_or_channels, get_num_channels
+from .utils import print_iunet_layout
 
 
 class iUNet(nn.Module):
@@ -28,7 +28,8 @@ class iUNet(nn.Module):
 
     :param input_channels:
         The number of input channels, which is then also the number of output
-        channel. Can also be the complete input shape (without batch dimension).
+        channels. Can also be the complete input shape (without batch
+        dimension).
     :param architecture:
         Determines the number of invertible layers at each
         resolution (both left and right), e.g. ``[2,3,4]`` results in the
@@ -47,8 +48,8 @@ class iUNet(nn.Module):
         Additional keyword arguments passed on via ``kwargs`` are
         ``dim`` (whether this is a 1D, 2D or 3D iUNet), the coordinates
         of the specific module within the iUNet (``LR``, ``level`` and
-        ``module``) as well as ``architecture``. By default, this creates an
-        additive coupling layer, whose block consists of a number of
+        ``module_index``) as well as ``architecture``. By default, this creates
+        an additive coupling layer, whose block consists of a number of
         convolutional layers, followed by a `leaky ReLU` activation function
         and an instance normalization layer. The number of blocks can be
         controlled by setting ``"block_depth"`` in ``module_kwargs``.
@@ -65,8 +66,17 @@ class iUNet(nn.Module):
         or to leave it at the initialized values.
         Defaults to ``True``.
     :param resampling_stride:
-        Controls the stride of the invertible up- and downsampling. Currently,
-        only a stride of 2 across als dimensions is possible.
+        Controls the stride of the invertible up- and downsampling.
+        The format can be either a single integer, a single tuple (where the
+        length corresponds to the spatial dimensions of the data), or a list
+        containing either of the last two options (where the length of the
+        list has to be equal to the number of downsampling operations),
+        For example: ``2`` would result in a up-/downsampling with a factor of 2
+        along each dimension; ``(2,1,4)`` would apply (at every
+        resampling) a factor of 2, 1 and 4 for the height, width and depth
+        dimensions respectively, whereas for a 3D iUNet with 3 up-/downsampling
+        stages, ``[(2,1,3), (2,2,2), (4,3,1)]`` would result in different
+        strides at different up-/downsampling stages.
     :param resampling_method:
         Chooses the method for parametrizing orthogonal matrices for
         invertible up- and downsampling. Can be either ``"exp"`` (i.e.
@@ -94,7 +104,6 @@ class iUNet(nn.Module):
         ``torch.nn.functional.pad`` for ``mode``. If set to ``None``,
         this behavior is deactivated.
         Defaults to ``"constant"``.
-
     :param padding_value:
         If ``padding_mode`` is set to `constant`, this
         is the value that the input is padded with, e.g. 0.
@@ -119,7 +128,7 @@ class iUNet(nn.Module):
                  slice_mode: str = "double",
                  learnable_resampling: bool = True,
                  resampling_stride: int = 2,
-                 resampling_method: str = "exp",
+                 resampling_method: str = "cayley",
                  resampling_init: Union[str, np.ndarray, torch.Tensor] = "haar",
                  resampling_kwargs: dict = None,
                  padding_mode: Union[str, type(None)] = "constant",
@@ -257,7 +266,7 @@ class iUNet(nn.Module):
                 
                 # Initialize the learnable upsampling with the same
                 # kernel as the learnable downsampling. This way, by
-                # zero-initialization  of the coupling layers, the
+                # zero-initialization of the coupling layers, the
                 # invertible U-Net is initialized as the identity
                 # function.
                 if learnable_resampling:
@@ -288,9 +297,9 @@ class iUNet(nn.Module):
                         create_module_fn(
                                  self.channels[i],
                                  dim=self.dim,
-                                 LR='R',
+                                 LR='L',
                                  level=i,
-                                 module=j,
+                                 module_index=j,
                                  architecture=self.architecture,
                                  **module_kwargs),
                         disable=disable_custom_gradient
@@ -304,12 +313,13 @@ class iUNet(nn.Module):
                                  dim=self.dim,
                                  LR='R',
                                  level=i,
-                                 module=j,
+                                 module_index=num_layers-j,
                                  architecture=self.architecture,
                                  **module_kwargs),
                         disable=disable_custom_gradient
                     )
                 )
+
 
     def get_padding(self, x: torch.Tensor):
         """Calculates the required padding for the input.
@@ -324,12 +334,18 @@ class iUNet(nn.Module):
 
         # Pad evenly on all sides
         padding = [None] * (2 * len(shape))
-        padding[::2] = [p // 2 for p in total_padding]
-        padding[1::2] = [p - p // 2 for p in total_padding]
+        padding[::2] = [p - p // 2 for p in total_padding]
+        padding[1::2] = [p // 2 for p in total_padding]
+
+        # Weird thing about F.pad: While the torch data format is
+        # (DHW), the padding format is (WHD).
+        padding = padding[::-1]
+
         return padded_shape, padding
 
     def revert_padding(self, x: torch.Tensor, padding: List[int]):
         """Reverses a given padding.
+        
         :param x:
             The image that was originally padded.
         :param padding:
@@ -409,20 +425,24 @@ class iUNet(nn.Module):
 
     def forward(self, x: torch.Tensor):
         """Applies the forward mapping of the iUNet to ``x``.
-
         """
         padded_shape, padding = self.get_padding(x)
         if padded_shape != x.shape[2:] and self.padding_mode is not None:
             if self.verbose:
                 warnings.warn(
-                    "Input resolution " + str(list(x.shape[2:])) +
-                    " cannot be downsampled " + str(len(self.architecture)-1) +
+                    "Input resolution {} cannot be downsampled {}" 
                     " times without residuals. "
-                    "Padding to resolution " + str(padded_shape) + " is " 
-                    "applied with mode '" + self.padding_mode + "' to retain "
+                    "Padding to resolution {} is " 
+                    "applied with mode {} to retain "
                     "invertibility. Set padding_mode=None to deactivate "
-                    "padding. If so, expect errors."
-                )
+                    "padding. If so, expect errors.".format(
+                            list(x.shape[2:]),
+                            len(self.architecture)-1,
+                            padded_shape,
+                            self.padding_mode
+                        )
+                    )
+
             x = nn.functional.pad(
                     x, padding, self.padding_mode, self.padding_value)
 
@@ -464,6 +484,8 @@ class iUNet(nn.Module):
     def inverse(self, x: torch.Tensor):
         """Applies the inverse of the iUNet to ``x``.
         """
+
+        print("Applying inverse of network")
 
         padded_shape, padding = self.get_padding(x)
         if padded_shape != x.shape[2:] and self.padding_mode is not None:
@@ -513,3 +535,7 @@ class iUNet(nn.Module):
             x = self.revert_padding(x, padding)
         return x
 
+    def print_layout(self):
+        """Prints the layout of the iUNet.
+        """
+        print_iunet_layout(self)

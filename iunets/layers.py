@@ -9,7 +9,7 @@ from typing import Callable, Union, Iterable, Tuple
 
 import numpy as np
 
-from .utils import calculate_shapes_or_channels, get_num_channels
+from .utils import get_num_channels
 from .expm import expm
 from .cayley import cayley
 
@@ -61,7 +61,7 @@ class OrthogonalResamplingLayer(torch.nn.Module):
     def __init__(self,
                  low_channel_number: int,
                  stride: Union[int, Tuple[int, ...]],
-                 method: str = 'exp',
+                 method: str = 'cayley',
                  init: Union[str, np.ndarray, torch.Tensor] = 'haar',
                  learnable: bool = True,
                  *args,
@@ -76,9 +76,11 @@ class OrthogonalResamplingLayer(torch.nn.Module):
 
         assert (method in ['exp', 'cayley'])
         if method is 'exp':
-            self.__calculate_kernel_matrix__ = __calculate_kernel_matrix_exp__
+            self.__calculate_kernel_matrix__ \
+                = __calculate_kernel_matrix_exp__
         elif method is 'cayley':
-            self.__calculate_kernel_matrix__ = __calculate_kernel_matrix_cayley__
+            self.__calculate_kernel_matrix__ \
+                = __calculate_kernel_matrix_cayley__
 
         self._kernel_matrix_shape = ((self.low_channel_number,)
                                      + (self.channel_multiplier,) * 2)
@@ -112,7 +114,7 @@ class InvertibleDownsampling1D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
                  stride: _size_1_t = 2,
-                 method: str = 'exp',
+                 method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
@@ -146,7 +148,7 @@ class InvertibleUpsampling1D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
                  stride: _size_1_t = 2,
-                 method: str = 'exp',
+                 method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
@@ -180,7 +182,7 @@ class InvertibleDownsampling2D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
                  stride: _size_2_t = 2,
-                 method: str = 'exp',
+                 method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
@@ -214,7 +216,7 @@ class InvertibleUpsampling2D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
                  stride: _size_2_t = 2,
-                 method: str = 'exp',
+                 method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
@@ -248,7 +250,7 @@ class InvertibleDownsampling3D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
                  stride: _size_3_t = 2,
-                 method: str = 'exp',
+                 method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
@@ -282,7 +284,7 @@ class InvertibleUpsampling3D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
                  stride: _size_3_t = 2,
-                 method: str = 'exp',
+                 method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
@@ -399,10 +401,18 @@ class StandardBlock(nn.Module):
         self.seq = nn.ModuleList()
 
         for i in range(block_depth):
+
+            current_in_channels = max(num_in_channels, num_out_channels)
+            current_out_channels = max(num_in_channels, num_out_channels)
+            if i == 0:
+                current_in_channels = num_in_channels
+            elif i == block_depth-1:
+                current_out_channels = num_out_channels
+
             self.seq.append(
                 conv_op(
-                    num_in_channels,
-                    num_out_channels,
+                    current_in_channels,
+                    current_out_channels,
                     3,
                     padding=1,
                     bias=False))
@@ -414,7 +424,7 @@ class StandardBlock(nn.Module):
             self.seq.append(nn.LeakyReLU(inplace=True))
 
             # With groups=1, group normalization becomes layer normalization
-            self.seq.append(nn.GroupNorm(1, num_out_channels, eps=1e-3))
+            self.seq.append(nn.GroupNorm(1, current_out_channels, eps=1e-3))
 
         # Initialize the block as the zero transform, such that the coupling
         # becomes the coupling becomes an identity transform (up to permutation
@@ -435,6 +445,14 @@ def create_standard_module(input_shape_or_channels, *args, **kwargs):
     num_channels = get_num_channels(input_shape_or_channels)
     num_F_in_channels = num_channels // 2
     num_F_out_channels = num_channels - num_F_in_channels
+
+    module_index = kwargs.pop('module_index', 0)
+    # For odd number of channels, this switches the roles of input and output
+    # channels at every other layer, e.g. 1->2, then 2->1.
+    if np.mod(module_index, 2) == 0:
+        (num_F_in_channels, num_F_out_channels) = (
+            num_F_out_channels, num_F_in_channels
+        )
     return StandardAdditiveCoupling(
         F=StandardBlock(
             dim,
@@ -447,7 +465,7 @@ def create_standard_module(input_shape_or_channels, *args, **kwargs):
 
 def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
                           stride : Tuple[int, ...],
-                          method : str = 'exp',
+                          method : str = 'cayley',
                           init : str = 'haar',
                           dtype : str = 'float32',
                           *args,
@@ -575,3 +593,109 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
 
     else:
         raise NotImplementedError("Unknown initialization.")
+
+
+class OrthogonalChannelMixing(nn.Module):
+    def __init__(self,
+                 in_channels: int,
+                 method: str = 'cayley',
+                 learnable: bool = True):
+        super(OrthogonalResamplingLayer, self).__init__()
+
+        self.in_channels = in_channels
+        self.weight = nn.Parameter(
+            (in_channels, in_channels),
+            requires_grad=learnable
+        )
+
+        assert (method in ['exp', 'cayley'])
+        if method is 'exp':
+            self.__calculate_kernel_matrix__ \
+                = __calculate_kernel_matrix_exp__
+        elif method is 'cayley':
+            self.__calculate_kernel_matrix__ \
+                = __calculate_kernel_matrix_cayley__
+
+    # Apply the chosen method to the weight in order to parametrize
+    # an orthogonal matrix, then reshape into a convolutional kernel.
+    @property
+    def kernel_matrix(self):
+        """The orthogonal matrix created by the chosen parametrisation method.
+        """
+        return self.__calculate_kernel_matrix__(self.weight)
+
+    @property
+    def kernel_matrix_transposed(self):
+        """The orthogonal matrix created by the chosen parametrisation method.
+        """
+        return torch.transpose(self.kernel_matrix, -1, -2)
+
+
+class InvertibleChannelMixing2D(OrthogonalChannelMixing):
+    def __init__(self,
+                 in_channels: int,
+                 method: str = 'cayley',
+                 learnable: bool = True):
+        super(InvertibleChannelMixing2D, self).__init__(
+            in_channels=in_channels,
+            method=method,
+            learnable=learnable
+        )
+
+    @property
+    def kernel(self):
+        return self.kernel_matrix.view(
+            self.in_channels, self.in_channels, 1
+        )
+
+    def forward(self, x):
+        return nn.functional.conv1d(x, self.kernel)
+
+    def inverse(self, x):
+        return nn.functional.conv_transpose1d(x, self.kernel)
+
+class InvertibleChannelMixing2D(OrthogonalChannelMixing):
+    def __init__(self,
+                 in_channels: int,
+                 method: str = 'cayley',
+                 learnable: bool = True):
+        super(InvertibleChannelMixing2D, self).__init__(
+            in_channels=in_channels,
+            method=method,
+            learnable=learnable
+        )
+
+    @property
+    def kernel(self):
+        return self.kernel_matrix.view(
+            self.in_channels, self.in_channels, 1, 1
+        )
+
+    def forward(self, x):
+        return nn.functional.conv2d(x, self.kernel)
+
+    def inverse(self, x):
+        return nn.functional.conv_transpose2d(x, self.kernel)
+
+class InvertibleChannelMixing3D(OrthogonalChannelMixing):
+    def __init__(self,
+                 in_channels: int,
+                 method: str = 'cayley',
+                 learnable: bool = True):
+        super(InvertibleChannelMixing3D, self).__init__(
+            in_channels=in_channels,
+            method=method,
+            learnable=learnable
+        )
+
+    @property
+    def kernel(self):
+        return self.kernel_matrix.view(
+            self.in_channels, self.in_channels, 1, 1, 1
+        )
+
+    def forward(self, x):
+        return nn.functional.conv3d(x, self.kernel)
+
+    def inverse(self, x):
+        return nn.functional.conv_transpose3d(x, self.kernel)
