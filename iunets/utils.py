@@ -8,72 +8,46 @@ def get_num_channels(input_shape_or_channels):
         return input_shape_or_channels[0]
     else:
         return input_shape_or_channels
-    
-    
-def calculate_shapes_or_channels(
-    input_shape_or_channels,
-    slice_fraction,
-    dim,
-    i_level,
-    sliced = False):
-    
-    # If input_shape_or_channels is the input shape
-    if hasattr(input_shape_or_channels,'__iter__'):
-        assert(len(input_shape_or_channels) == dim+1)
-        if i_level == 0:
-            return input_shape_or_channels
-        else:
-            # Copy to list to  prevent changing the original list.
-            output_shape = [i for i in input_shape_or_channels] 
+        
+        
+def print_iunet_layout(iunet):
+    left = []
+    right = []
+    splits = []
 
-            initial_split = (input_shape_or_channels // slice_fraction + input_shape_or_channels%slice_fraction) * slice_fraction
-            output_shape[0] = (initial_split * 2**(dim*i_level) // 
-                (slice_fraction**i_level))
-        if sliced:
-            output_shape[0] = output_shape[0] // slice_fraction
-            
-            
-        resolution_quotient = 2**i_level
-        for j in range(1,len(output_shape)):
-            output_shape[j] = output_shape[j] // resolution_quotient
-        return output_shape
-    
-    else:
-        # If input_shape_or_channels is just the number of channels
-        if i_level == 0:
-            return input_shape_or_channels
+    middle_padding = [''] * (iunet.num_levels)
+
+    output = [''] * (iunet.num_levels)
+
+    for i in range(iunet.num_levels):
+        left.append(
+            '-'.join([str(iunet.channels[i])] * iunet.architecture[i])
+        )
+        if i < iunet.num_levels-1:
+            splits.append(
+                '({}/{})'.format(
+                    iunet.skipped_channels[i],
+                    iunet.channels_before_downsampling[i]
+                )
+            )
         else:
-            initial_split = (input_shape_or_channels // slice_fraction + input_shape_or_channels%slice_fraction) * slice_fraction
-            return (initial_split * 2**(dim*i_level) // (slice_fraction**i_level))
-    
-    
-    
-def calculate_shapes_or_channels_old(
-    input_shape_or_channels,
-    slice_fraction,
-    dim,
-    i_level,
-    sliced = False):
-    
-    # If input_shape_or_channels is the input shape
-    if hasattr(input_shape_or_channels,'__iter__'):
-        assert(len(input_shape_or_channels) == dim+1)
-        
-        # Copy to list to  prevent changing the original list.
-        output_shape = [i for i in input_shape_or_channels] 
-        
-        output_shape[0] = (output_shape[0] * 2**(dim*i_level) // 
-            (slice_fraction**i_level))
-        if sliced:
-            output_shape[0] = output_shape[0] // slice_fraction
-            
-            
-        resolution_quotient = 2**i_level
-        for j in range(1,len(output_shape)):
-            output_shape[j] = output_shape[j] // resolution_quotient
-        return output_shape
-    
-    else:
-        # If input_shape_or_channels is just the number of channels
-        return (input_shape_or_channels * 2**(dim*i_level) // 
-            (slice_fraction**i_level))
+            splits.append('')
+        right.append(splits[-1] + '-' + left[-1])
+        left[-1] = left[-1] + '-'+ splits[-1]
+
+
+    for i in range(iunet.num_levels - 1, -1, -1):
+        if i < iunet.num_levels-1:
+            middle_padding[i] = \
+                ''.join(['-'] * max([len(output[i+1]) - len(splits[i]),4]))
+        output[i] = left[i] + middle_padding[i] + right[i]
+
+    for i in range(iunet.num_levels):
+        if i>0:
+            outside_padding = len(output[0]) - len(output[i]) 
+            _left =  outside_padding // 2
+            left_padding = ''.join(['-'] * _left)
+            _right = outside_padding - _left
+            right_padding = ''.join(['-'] * _right)
+            output[i] = ''.join([left_padding, output[i], right_padding])
+        print(output[i])
