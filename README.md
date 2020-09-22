@@ -47,6 +47,7 @@ downsampling due to more exact methods for parametrizing orthogonal matrices.
 - The required padding for invertibility is now done automatically (if desired).
 - The learnable invertible up- and downsampling now support different 
  initialization options (such as initialization as the Haar transform).
+- Quality-of-life additions such as the `print_layout()` method.
 
 ## TODOs / Future Releases
 This library will be continuously updated in the near future. It should now
@@ -130,7 +131,7 @@ e.g. `2`, `(2,1,3)`, `[(2,1,3), (2,2,2), (4,3,1)]`.
 
 ### Padding behavior
 For full invertibility of any invertible network, the total dimensionality of 
-the output has to be the same the dimensionality of the input. This can be
+the output has to be the same as the dimensionality of the input. This can be
 problematic when invertible downsampling operations are involved. Take the 
 example of an image with odd-valued resolution -- this cannot be downsampled
 exactly by a factor of 2 without remainder! Our library automatically chooses
@@ -173,3 +174,5 @@ the padding required to guarantee invertibility from padded input to output.
     Setting revert_input_padding to False (standard behavior)...
     Now cropped output shape: (2, 32, 128, 88)
 
+This functionality uses the `torch.nn.functional.pad` API. For further control,
+the user can set its `padding_mode` and `padding_value` parameters.
