@@ -175,8 +175,4 @@ the padding required to guarantee invertibility from padded input to output.
     Now cropped output shape: (2, 32, 128, 88)
 
 This functionality uses the `torch.nn.functional.pad` API. For further control,
-<<<<<<< HEAD
 the user can set its `padding_mode` and `padding_value` parameters.
-=======
-the user can set its `padding_mode` and `padding_value` parameters.
->>>>>>> origin/numerical_precision
