@@ -348,18 +348,19 @@ class iUNet(nn.Module):
         :param padding:
             The padding that is removed from ``x``.
         """
+        shape = x.shape
         if self.dim == 1:
             x = x[:, :,
-                  padding[0]:-padding[1]]
+                  padding[0]:shape[2]-padding[1]]
         if self.dim == 2:
             x = x[:, :,
-                  padding[2]:-padding[3],
-                  padding[0]:-padding[1]]
+                  padding[2]:shape[2]-padding[3],
+                  padding[0]:shape[3]-padding[1]]
         if self.dim == 3:
             x = x[:, :,
-                  padding[4]:-padding[5],
-                  padding[2]:-padding[3],
-                  padding[0]:-padding[1]]
+                  padding[4]:shape[2]-padding[5],
+                  padding[2]:shape[3]-padding[3],
+                  padding[0]:shape[4]-padding[1]]
 
         return x
 
