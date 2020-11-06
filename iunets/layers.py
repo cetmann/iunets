@@ -1,3 +1,6 @@
+from warnings import warn
+from typing import Callable, Union, Iterable, Tuple
+
 import torch
 from torch import nn, Tensor
 from torch.nn.common_types import _size_1_t, _size_2_t, _size_3_t
@@ -5,36 +8,39 @@ from torch.nn.modules.utils import _single, _pair, _triple
 import torch.nn.functional as F
 from torch.autograd import Function
 
-from typing import Callable, Union, Iterable, Tuple
 
 import numpy as np
 
 from .utils import get_num_channels
 from .expm import expm
 from .cayley import cayley
+from .householder import householder_transform
 
 
-def __calculate_kernel_matrix_exp__(weight, *args, **kwargs):
+def __calculate_kernel_matrix_exp__(weight, **kwargs):
     skew_symmetric_matrix = weight - torch.transpose(weight, -1, -2)
     return expm.apply(skew_symmetric_matrix)
 
 
-def __calculate_kernel_matrix_cayley__(weight, *args, **kwargs):
+def __calculate_kernel_matrix_cayley__(weight, **kwargs):
     skew_symmetric_matrix = weight - torch.transpose(weight, -1, -2)
     return cayley.apply(skew_symmetric_matrix)
 
 
-def __calculate_kernel_matrix_householder__(weight, *args, **kwargs):
-    raise NotImplementedError("Parametrization via Householder transform " 
-        "not implemented.")
+def __calculate_kernel_matrix_householder__(weight, **kwargs):
+    n_reflections = kwargs.get('n_reflections', -1)
+    eps = kwargs.get('eps', 1e-6)
+    weight_cols = weight.shape[-1]
+    weight = weight[..., n_reflections:]
+    return householder_transform(weight, n_reflections, eps)
 
 
-def __calculate_kernel_matrix_givens__(weight, *args, **kwargs):
+def __calculate_kernel_matrix_givens__(weight, **kwargs):
     raise NotImplementedError("Parametrization via Givens rotations not "
         "implemented.")
 
 
-def __calculate_kernel_matrix_bjork__(weight, *args, **kwargs):
+def __calculate_kernel_matrix_bjork__(weight, **kwargs):
     raise NotImplementedError("Parametrization via Bjork peojections "
         "not implemented.")
 
@@ -64,7 +70,7 @@ class OrthogonalResamplingLayer(torch.nn.Module):
                  method: str = 'cayley',
                  init: Union[str, np.ndarray, torch.Tensor] = 'haar',
                  learnable: bool = True,
-                 *args,
+                 init_kwargs: dict = None,
                  **kwargs):
 
         super(OrthogonalResamplingLayer, self).__init__()
@@ -74,13 +80,21 @@ class OrthogonalResamplingLayer(torch.nn.Module):
         self.channel_multiplier = int(np.prod(stride))
         self.high_channel_number = self.channel_multiplier * low_channel_number
 
-        assert (method in ['exp', 'cayley'])
+        if init_kwargs is None:
+            init_kwargs = {}
+        self.init_kwargs = init_kwargs
+        self.kwargs = kwargs
+
+        assert (method in ['exp', 'cayley', 'householder'])
         if method is 'exp':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_exp__
         elif method is 'cayley':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_cayley__
+        elif method is 'householder':
+            self.__calculate_kernel_matrix__ \
+                = __calculate_kernel_matrix_householder__
 
         self._kernel_matrix_shape = ((self.low_channel_number,)
                                      + (self.channel_multiplier,) * 2)
@@ -91,7 +105,9 @@ class OrthogonalResamplingLayer(torch.nn.Module):
             __initialize_weight__(kernel_matrix_shape=self._kernel_matrix_shape,
                                   stride=self.stride,
                                   method=self.method,
-                                  init=init)
+                                  init=init,
+                                  **self.init_kwargs
+                                  )
         )
         self.weight.requires_grad = learnable
 
@@ -101,7 +117,7 @@ class OrthogonalResamplingLayer(torch.nn.Module):
     def kernel_matrix(self):
         """The orthogonal matrix created by the chosen parametrisation method.
         """
-        return self.__calculate_kernel_matrix__(self.weight)
+        return self.__calculate_kernel_matrix__(self.weight, **self.kwargs)
 
     @property
     def kernel(self):
@@ -504,10 +520,14 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
     num_matrices = kernel_matrix_shape[0]
     
     # tbd: Givens, Householder, Bjork, give proper exception.
-    assert(method in ['exp', 'cayley']) 
+    assert(method in ['exp', 'cayley', 'householder'])
+    if method is 'householder':
+        warn('Householder parametrization not fully implemented yet. '
+             'Only random initialization currently working.')
+        init = 'random'
         
     if init is 'random':
-        return torch.randn(kernel_matrix_shape)
+        return torch.randn(kernel_matrix_shape).to('dtype')
     
     if init is 'haar' and set(stride) != {2}:
         print("Initialization 'haar' only available for stride 2.")
@@ -603,7 +623,9 @@ class OrthogonalChannelMixing(nn.Module):
     def __init__(self,
                  in_channels: int,
                  method: str = 'cayley',
-                 learnable: bool = True):
+                 learnable: bool = True,
+                 **kwargs
+                 ):
         super(OrthogonalResamplingLayer, self).__init__()
 
         self.in_channels = in_channels
@@ -612,13 +634,18 @@ class OrthogonalChannelMixing(nn.Module):
             requires_grad=learnable
         )
 
-        assert (method in ['exp', 'cayley'])
+        assert (method in ['exp', 'cayley', 'householder'])
         if method is 'exp':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_exp__
         elif method is 'cayley':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_cayley__
+        elif method is 'householder':
+            self.__calculate_kernel_matrix__ \
+                = __calculate_kernel_matrix_householder__
+
+        self.kwargs = kwargs
 
     # Apply the chosen method to the weight in order to parametrize
     # an orthogonal matrix, then reshape into a convolutional kernel.
@@ -626,7 +653,7 @@ class OrthogonalChannelMixing(nn.Module):
     def kernel_matrix(self):
         """The orthogonal matrix created by the chosen parametrisation method.
         """
-        return self.__calculate_kernel_matrix__(self.weight)
+        return self.__calculate_kernel_matrix__(self.weight, **self.kwargs)
 
     @property
     def kernel_matrix_transposed(self):
@@ -635,16 +662,19 @@ class OrthogonalChannelMixing(nn.Module):
         return torch.transpose(self.kernel_matrix, -1, -2)
 
 
-class InvertibleChannelMixing2D(OrthogonalChannelMixing):
+class InvertibleChannelMixing1D(OrthogonalChannelMixing):
     def __init__(self,
                  in_channels: int,
                  method: str = 'cayley',
-                 learnable: bool = True):
-        super(InvertibleChannelMixing2D, self).__init__(
+                 learnable: bool = True,
+                 **kwargs):
+        super(InvertibleChannelMixing1D, self).__init__(
             in_channels=in_channels,
             method=method,
-            learnable=learnable
+            learnable=learnable,
+            **kwargs
         )
+        self.kwargs = kwargs
 
     @property
     def kernel(self):
@@ -662,12 +692,16 @@ class InvertibleChannelMixing2D(OrthogonalChannelMixing):
     def __init__(self,
                  in_channels: int,
                  method: str = 'cayley',
-                 learnable: bool = True):
+                 learnable: bool = True,
+                 **kwargs
+                 ):
         super(InvertibleChannelMixing2D, self).__init__(
             in_channels=in_channels,
             method=method,
-            learnable=learnable
+            learnable=learnable,
+            **kwargs
         )
+        self.kwargs = kwargs
 
     @property
     def kernel(self):
@@ -685,12 +719,16 @@ class InvertibleChannelMixing3D(OrthogonalChannelMixing):
     def __init__(self,
                  in_channels: int,
                  method: str = 'cayley',
-                 learnable: bool = True):
+                 learnable: bool = True,
+                 **kwargs
+                 ):
         super(InvertibleChannelMixing3D, self).__init__(
             in_channels=in_channels,
             method=method,
-            learnable=learnable
+            learnable=learnable,
+            **kwargs
         )
+        self.kwargs = kwargs
 
     @property
     def kernel(self):

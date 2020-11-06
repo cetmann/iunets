@@ -129,6 +129,9 @@ class iUNet(nn.Module):
                  resampling_method: str = "cayley",
                  resampling_init: Union[str, np.ndarray, torch.Tensor] = "haar",
                  resampling_kwargs: dict = None,
+                 channel_mixing: bool = False,
+                 channel_mixing_method: str = 'householder',
+                 channel_mixing_kwargs: dict = None,
                  padding_mode: Union[str, type(None)] = "constant",
                  padding_value: int = 0,
                  revert_input_padding: bool = True,
@@ -172,6 +175,12 @@ class iUNet(nn.Module):
         self.downsampling_factors = self.__total_downsampling_factor__(
             self.resampling_stride
         )
+
+        self.channel_mixing = channel_mixing
+        self.channel_mixing_method = channel_mixing_method
+        if channel_mixing_kwargs is None:
+            channel_mixing_kwargs = {}
+        self.channel_mixing_kwargs = channel_mixing_kwargs
 
         # Standard behavior of self.slice_mode
         if slice_mode is "double" or slice_mode is "constant":
