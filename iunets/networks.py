@@ -130,7 +130,7 @@ class iUNet(nn.Module):
                  resampling_init: Union[str, np.ndarray, torch.Tensor] = "haar",
                  resampling_kwargs: dict = None,
                  channel_mixing: bool = False,
-                 channel_mixing_method: str = 'householder',
+                 channel_mixing_method: str = 'cayley',
                  channel_mixing_kwargs: dict = None,
                  padding_mode: Union[str, type(None)] = "constant",
                  padding_value: int = 0,
@@ -222,8 +222,8 @@ class iUNet(nn.Module):
                          InvertibleUpsampling2D,
                          InvertibleUpsampling3D][dim-1]
 
-        self.module_L = nn.ModuleList()
-        self.module_R = nn.ModuleList()
+        self.encoder_modules = nn.ModuleList()
+        self.decoder_modules = nn.ModuleList()
         self.slice_layers = nn.ModuleList()
         self.concat_layers = nn.ModuleList()
         self.downsampling_layers = nn.ModuleList()
@@ -294,8 +294,8 @@ class iUNet(nn.Module):
                     )
                 )
 
-            self.module_L.append(nn.ModuleList())
-            self.module_R.append(nn.ModuleList())
+            self.encoder_modules.append(nn.ModuleList())
+            self.decoder_modules.append(nn.ModuleList())
             
             for j in range(num_layers):
                 coordinate_kwargs = {
@@ -305,7 +305,7 @@ class iUNet(nn.Module):
                     'module_index': j,
                     'architecture': self.architecture,
                 }
-                self.module_L[i].append(
+                self.encoder_modules[i].append(
                     InvertibleModuleWrapper(
                         create_module_fn(
                                  self.channels[i],
@@ -316,7 +316,7 @@ class iUNet(nn.Module):
                 )
 
                 coordinate_kwargs['LR'] = 'R'
-                self.module_R[i].append(
+                self.decoder_modules[i].append(
                     InvertibleModuleWrapper(
                         create_module_fn(
                                  self.channels[i],
@@ -431,14 +431,15 @@ class iUNet(nn.Module):
                 factors[j] = factors[j] * element_int
         return tuple(factors)
 
-    def forward(self, x: torch.Tensor):
-        """Applies the forward mapping of the iUNet to ``x``.
-        """
-        if not x.shape[1] == self.channels[0]:
-            raise RuntimeError(
-                "The number of channels does not match in_channels."
+    def pad(self, x, padded_shape=None, padding=None):
+        if self.padding_mode is None:
+            raise AttributeError(
+                "padding_mode in {} is set to None.".format(self)
             )
-        padded_shape, padding = self.get_padding(x)
+
+        if padded_shape is None or padding is None:
+            padded_shape, padding = self.get_padding(x)
+
         if padded_shape != x.shape[2:] and self.padding_mode is not None:
             if self.verbose:
                 warnings.warn(
@@ -457,70 +458,120 @@ class iUNet(nn.Module):
             x = nn.functional.pad(
                 x, padding, self.padding_mode, self.padding_value
             )
+        return x
 
-        # skip_inputs is a list of the skip connections
-        skip_inputs = []
+    def encode(self, x, use_padding=False):
+        """Encodes x, i.e. applies the contractive part of the iUNet.
+        """
+        codes = []
 
-        # Left side
+        if use_padding:
+            x = self.pad(x)
+
         for i in range(self.num_levels):
             depth = self.architecture[i]
 
-            # RevNet L
-            for j in range(depth):
-                x = self.module_L[i][j](x)
+            # Modules of the encoder block
 
-            # Downsampling L
+            for j in range(depth):
+                x = self.encoder_modules[i][j](x)
+
+            # Downsampling
             if i < self.num_levels - 1:
                 y, x = self.slice_layers[i](x)
-                skip_inputs.append(y)
+                codes.append(y)
                 x = self.downsampling_layers[i](x)
 
-        # Right side
+        # Handle edge case if there is no downsampling
+        if len(codes) == 0:
+            return x
+
+        codes.append(x)
+        return tuple(codes)
+
+    def decode(self, *codes):
+        """Applies the expansive, i.e. decoding, portion of the iUNet.
+        """
+        # Transform codes to a list to allow for using codes.pop()
+        if isinstance(codes, tuple):
+            codes = list(codes)
+        else:
+            codes = [codes]
+
+        x = codes.pop()
+
         for i in range(self.num_levels-1, -1, -1):
             depth = self.architecture[i]
 
             # Upsampling R
             if i < self.num_levels-1:
-                y = skip_inputs.pop()
+                y = codes.pop()
                 x = self.upsampling_layers[i](x)
                 x = self.concat_layers[i](y, x)
 
             # RevNet R
             for j in range(depth):
-                x = self.module_R[i][j](x)
+                x = self.decoder_modules[i][j](x)
+
+        return x
+
+    def forward(self, x: torch.Tensor):
+        """Applies the forward mapping of the iUNet to ``x``.
+        """
+        if not x.shape[1] == self.channels[0]:
+            raise RuntimeError(
+                "The number of channels does not match in_channels."
+            )
+        if self.padding_mode is not None:
+            padded_shape, padding = self.get_padding(x)
+            x = self.pad(x, padded_shape, padding)
+
+        code = self.encode(x, use_padding=False)
+        x = self.decode(*code)
 
         if self.padding_mode is not None and self.revert_input_padding:
             x = self.revert_padding(x, padding)
         return x
-    
-    def inverse(self, x: torch.Tensor):
-        """Applies the inverse of the iUNet to ``x``.
+
+    def decoder_inverse(self, x, use_padding=False):
+        """Applies the inverse of the decoder portion of the iUNet.
         """
 
-        padded_shape, padding = self.get_padding(x)
-        if padded_shape != x.shape[2:] and self.padding_mode is not None:
-            if self.verbose:
-                warnings.warn(
-                    "Input shape to the inverse mapping requires padding."
-                )
-            x = nn.functional.pad(
-                    x, padding, self.padding_mode, self.padding_value)
+        codes = []
 
-        skip_inputs = []
+        if use_padding:
+            x = self.pad(x)
 
         # Right side
         for i in range(self.num_levels):
             depth = self.architecture[i]
 
-            # RevNet R
+            # Resolution-preserving modules of the decoder
             for j in range(depth-1, -1, -1):
-                x = self.module_R[i][j].inverse(x)
+                x = self.decoder_modules[i][j].inverse(x)
 
-            # Downsampling R
+            # Downsampling
             if i < self.num_levels - 1:
                 y, x = self.concat_layers[i].inverse(x)
-                skip_inputs.append(y)
+                codes.append(y)
                 x = self.upsampling_layers[i].inverse(x)
+
+        # Handle edge case if there is no downsampling
+        if len(codes) == 0:
+            return x
+
+        codes.append(x)
+        return tuple(codes)
+
+    def encoder_inverse(self, *codes):
+        """Applies the inverse of the encoder portion of the iUNet.
+        """
+        # Transform codes to a list to allow for using codes.pop()
+        if isinstance(codes, tuple):
+            codes = list(codes)
+        else:
+            codes = [codes]
+        x = codes.pop()
 
         # Left side
         for i in range(self.num_levels-1, -1, -1):
@@ -528,13 +579,29 @@ class iUNet(nn.Module):
 
             # Upsampling L
             if i < self.num_levels-1:
-                y = skip_inputs.pop()
+                y = codes.pop()
                 x = self.downsampling_layers[i].inverse(x)
                 x = self.slice_layers[i].inverse(y, x)
 
             # RevNet L
             for j in range(depth-1, -1, -1):
-                x = self.module_L[i][j].inverse(x)
+                x = self.encoder_modules[i][j].inverse(x)
+
+        return x
+    
+    def inverse(self, x: torch.Tensor):
+        """Applies the inverse of the iUNet to ``x``.
+        """
+        if not x.shape[1] == self.channels[0]:
+            raise RuntimeError(
+                "The number of channels does not match in_channels."
+            )
+        if self.padding_mode is not None:
+            padded_shape, padding = self.get_padding(x)
+            x = self.pad(x, padded_shape, padding)
+
+        code = self.decoder_inverse(x, use_padding=False)
+        x = self.encoder_inverse(*code)
 
         if self.padding_mode is not None and self.revert_input_padding:
             if self.verbose:
