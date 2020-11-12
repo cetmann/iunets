@@ -19,6 +19,7 @@ from .layers import (create_standard_module,
 
 from .utils import print_iunet_layout
 
+CreateModuleFnType = Callable[[int, Optional[dict]], nn.Module]
 
 class iUNet(nn.Module):
     """Fully-invertible U-Net (iUNet).
@@ -58,7 +59,9 @@ class iUNet(nn.Module):
         passed on to ``create_module_fn``.
     :param slice_mode:
         Controls the fraction of channels, which gets invertibly
-        downsampled. Together with invertible downsampling
+        downsampled. E.g. ``"double"`` slices off just enough channels, such
+        that after invertibly downsampling, there are (as close as possible)
+        twice as many channels as before slicing.
         Currently supported modes: ``"double"``, ``"constant"``.
         Defaults to ``"double"``.
     :param learnable_resampling:
@@ -109,7 +112,8 @@ class iUNet(nn.Module):
         is the value that the input is padded with, e.g. 0.
         Defaults to ``0``.
     :param revert_input_padding:
-        Whether to revert the input padding in the output, if desired.
+        Whether to revert the input padding in the output, such that the
+        input resolution is preserved, even when padding is required.
         Defaults to ``True``.
     :param verbose:
         Level of verbosity. Currently only 0 (no warnings) or 1,
@@ -120,7 +124,7 @@ class iUNet(nn.Module):
                  in_channels: int,
                  architecture: Tuple[int, ...],
                  dim: int,
-                 create_module_fn: Callable[[int, Optional[dict]], nn.Module]
+                 create_module_fn: CreateModuleFnType
                     = create_standard_module,
                  module_kwargs: dict = None,
                  slice_mode: str = "double",
