@@ -626,11 +626,11 @@ class OrthogonalChannelMixing(nn.Module):
                  learnable: bool = True,
                  **kwargs
                  ):
-        super(OrthogonalResamplingLayer, self).__init__()
+        super(OrthogonalChannelMixing, self).__init__()
 
         self.in_channels = in_channels
         self.weight = nn.Parameter(
-            (in_channels, in_channels),
+            torch.zeros((in_channels, in_channels)),
             requires_grad=learnable
         )
 
