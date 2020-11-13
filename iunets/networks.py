@@ -14,6 +14,9 @@ from .layers import (create_standard_module,
                      InvertibleUpsampling1D,
                      InvertibleUpsampling2D,
                      InvertibleUpsampling3D,
+                     InvertibleChannelMixing1D,
+                     InvertibleChannelMixing2D,
+                     InvertibleChannelMixing3D,
                      SplitChannels,
                      ConcatenateChannels)
 
@@ -133,7 +136,8 @@ class iUNet(nn.Module):
                  resampling_method: str = "cayley",
                  resampling_init: Union[str, np.ndarray, torch.Tensor] = "haar",
                  resampling_kwargs: dict = None,
-                 channel_mixing: bool = False,
+                 learnable_channel_mixing: bool = True,
+                 channel_mixing_freq: int = -1,
                  channel_mixing_method: str = 'cayley',
                  channel_mixing_kwargs: dict = None,
                  padding_mode: Union[str, type(None)] = "constant",
@@ -180,7 +184,9 @@ class iUNet(nn.Module):
             self.resampling_stride
         )
 
-        self.channel_mixing = channel_mixing
+        # --- Invertible channel mixing attributes ---
+        self.learnable_channel_mixing = learnable_channel_mixing
+        self.channel_mixing_freq = channel_mixing_freq
         self.channel_mixing_method = channel_mixing_method
         if channel_mixing_kwargs is None:
             channel_mixing_kwargs = {}
@@ -225,6 +231,10 @@ class iUNet(nn.Module):
         upsampling_op = [InvertibleUpsampling1D,
                          InvertibleUpsampling2D,
                          InvertibleUpsampling3D][dim-1]
+
+        channel_mixing_op = [InvertibleChannelMixing1D,
+                             InvertibleChannelMixing2D,
+                             InvertibleChannelMixing3D][dim-1]
 
         self.encoder_modules = nn.ModuleList()
         self.decoder_modules = nn.ModuleList()
@@ -300,8 +310,24 @@ class iUNet(nn.Module):
 
             self.encoder_modules.append(nn.ModuleList())
             self.decoder_modules.append(nn.ModuleList())
-            
+
+            # Shorthand for adding channel mixing layers, which all have the
+            # same specifications.
+            def add_channel_mixing(obj, module_list):
+                module_list.append(
+                    InvertibleModuleWrapper(
+                        channel_mixing_op(
+                            in_channels=obj.channels[i],
+                            method=obj.channel_mixing_method,
+                            learnable=obj.learnable_channel_mixing,
+                            **obj.channel_mixing_kwargs),
+                        disable=disable_custom_gradient
+                    )
+                )
+
             for j in range(num_layers):
+                # create_module_fn is additionally supplied with a dictionary
+                # containing information about
                 coordinate_kwargs = {
                     'dim': self.dim,
                     'LR': 'L',
@@ -330,6 +356,17 @@ class iUNet(nn.Module):
                     )
                 )
 
+                if self.channel_mixing_freq == -1 and i!=len(architecture)-1:
+                    if j == 0:
+                        add_channel_mixing(self, self.decoder_modules[i])
+                    if j == num_layers - 1:
+                        add_channel_mixing(self, self.encoder_modules[i])
+
+                modulo = np.mod(j, self.channel_mixing_freq)
+                if (self.channel_mixing_freq>0 and
+                    modulo == self.channel_mixing_freq-1):
+                    add_channel_mixing(self, self.encoder_modules[i])
+                    add_channel_mixing(self, self.decoder_modules[i])
 
     def get_padding(self, x: torch.Tensor):
         """Calculates the required padding for the input.
@@ -473,7 +510,7 @@ class iUNet(nn.Module):
             x = self.pad(x)
 
         for i in range(self.num_levels):
-            depth = self.architecture[i]
+            depth = len(self.encoder_modules[i])
 
             # Modules of the encoder block
 
@@ -505,7 +542,7 @@ class iUNet(nn.Module):
         x = codes.pop()
 
         for i in range(self.num_levels-1, -1, -1):
-            depth = self.architecture[i]
+            depth = len(self.decoder_modules[i])
 
             # Upsampling R
             if i < self.num_levels-1:
@@ -548,7 +585,7 @@ class iUNet(nn.Module):
 
         # Right side
         for i in range(self.num_levels):
-            depth = self.architecture[i]
+            depth = len(self.decoder_modules[i])
 
             # Resolution-preserving modules of the decoder
             for j in range(depth-1, -1, -1):
@@ -579,7 +616,7 @@ class iUNet(nn.Module):
 
         # Left side
         for i in range(self.num_levels-1, -1, -1):
-            depth = self.architecture[i]
+            depth = len(self.encoder_modules[i])
 
             # Upsampling L
             if i < self.num_levels-1:
