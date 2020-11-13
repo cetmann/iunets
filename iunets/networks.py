@@ -452,7 +452,6 @@ class iUNet(nn.Module):
 
     def __format_stride__(self, stride):
         """Parses the resampling_stride and reformats it into a standard format.
-
         """
         self.__check_stride_format__(stride)
         if isinstance(stride, int):
@@ -466,6 +465,8 @@ class iUNet(nn.Module):
             return stride
 
     def __total_downsampling_factor__(self, stride):
+        """Calculates the total downsampling factor per spatial dimension.
+        """
         factors = [1] * len(stride[0])
         for i, element_tuple in enumerate(stride):
             for j, element_int in enumerate(stride[i]):
@@ -473,6 +474,8 @@ class iUNet(nn.Module):
         return tuple(factors)
 
     def pad(self, x, padded_shape=None, padding=None):
+        """Applies the chosen padding to the input, if required.
+        """
         if self.padding_mode is None:
             raise AttributeError(
                 "padding_mode in {} is set to None.".format(self)
