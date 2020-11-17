@@ -9,6 +9,9 @@ images. It is based on the paper
 <https://arxiv.org/abs/2005.05220>`_ by Christian Etmann, Rihuan Ke &
 Carola-Bibiane Schönlieb.
 
+Official documentation:
+`https://iunets.readthedocs.io <https://iunets.readthedocs.io>`_.
+
 By combining well-known reversible layers (such as additive coupling layers)
 with novel **learnable invertible up- and downsampling operators** and suitable
 channel splitting/concatenation, the iUNet is fully bijective. This allows
