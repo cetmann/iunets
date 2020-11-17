@@ -48,6 +48,7 @@ In the following, we demonstrate invertible channel mixing
         in_channels=3
     )
 
+    # Create random weights
     channel_mixing.weight.data = torch.randn(3, 3)
 
     mixed = channel_mixing(torch_img)
@@ -68,6 +69,13 @@ Output:
 .. code:: text
 
     MSE: 6.993812132075408e-15
+
+.. figure:: img/channel_mixing.png
+    :width: 800px
+    :align: center
+    :figclass: align-center
+
+    The example image before and after applying invertible channel mixing.
 
 Invertible channel mixing in iUNets
 -----------------------------------
