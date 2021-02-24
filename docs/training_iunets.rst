@@ -120,10 +120,12 @@ automatically used in the invertible portions of the network, i.e. the iUNet.
     INTERMEDIATE_CHANNELS = 64
     OUTPUT_CHANNELS = 10
 
-    input_layer = nn.Conv3d(INPUT_CHANNELS,
-                            INTERMEDIATE_CHANNELS,
-                            kernel_size=3,
-                            padding=1)
+    input_layer = nn.Conv3d(
+        INPUT_CHANNELS,
+        INTERMEDIATE_CHANNELS,
+        kernel_size=3,
+        padding=1
+    )
 
     iunet = iUNet(
         in_channels=INTERMEDIATE_CHANNELS,
@@ -131,10 +133,12 @@ automatically used in the invertible portions of the network, i.e. the iUNet.
         architecture=(2,3,4)
     )
 
-    output_layer = nn.Conv3d(INPUT_CHANNELS,
-                             INTERMEDIATE_CHANNELS,
-                             kernel_size=3,
-                             padding=1)
+    output_layer = nn.Conv3d(
+        INTERMEDIATE_CHANNELS,
+        OUTPUT_CHANNELS,
+        kernel_size=3,
+        padding=1
+    )
 
     # Chain all sub-networks together
     model = nn.Sequential(input_layer, iunet, output_layer).to('cuda')
