@@ -9,6 +9,13 @@ images. It is based on the paper
 <https://arxiv.org/abs/2005.05220>`_ by Christian Etmann, Rihuan Ke &
 Carola-Bibiane Schönlieb.
 
+The library can be installed via the following command:
+
+.. code-block:: text
+
+    pip install iunets
+
+
 Official documentation:
 `https://iunets.readthedocs.io <https://iunets.readthedocs.io>`_.
 
