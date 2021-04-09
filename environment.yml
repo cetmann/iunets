@@ -14,7 +14,6 @@ dependencies:
   - brotlipy=0.7.0=py36he6145b8_1001
   - ca-certificates=2020.10.14=0
   - certifi=2020.6.20=py36_0
-  - cffi=1.11.5=py36_0
   - chardet=3.0.4=py36h9880bd3_1008
   - cryptography=3.2.1=py36h6ec43e4_0
   - cudatoolkit=10.2.89=hfd86e86_1
