@@ -203,9 +203,10 @@ class iUNet(nn.Module):
 
         for i in range(len(architecture)-1):
             factor = desired_channels[i+1] / self.channels[i]
+            skip_fraction = (self.channel_multipliers[i] - factor) \
+                               / self.channel_multipliers[i]
             self.skipped_channels.append(
-                    int(max([1, np.round((self.channels[i] * (self.channel_multipliers[i] - factor)) / self.channel_multipliers[i])])
-                )
+                    int(max([1, np.round(self.channels[i] * skip_fraction)]))
             )
             self.channels_before_downsampling.append(
                     self.channels[i] - self.skipped_channels[-1]
@@ -215,7 +216,10 @@ class iUNet(nn.Module):
                 * self.channels_before_downsampling[i]
             )
 
-            channel_errors.append(abs(self.channels[i] - desired_channels[i]) / desired_channels[i])
+            channel_errors.append(
+                abs(self.channels[i] - desired_channels[i])
+                / desired_channels[i]
+            )
 
         if channels != self.channels:
             print(
@@ -229,12 +233,10 @@ class iUNet(nn.Module):
                 )
             )
 
-
-
-        # Verbosity level
+        # --- Verbosity level ---
         self.verbose = verbose
 
-        # Create the architecture of the iUNet
+        # --- Create the architecture of the iUNet ---
         downsampling_op = [InvertibleDownsampling1D,
                            InvertibleDownsampling2D,
                            InvertibleDownsampling3D][dim-1]
@@ -338,7 +340,8 @@ class iUNet(nn.Module):
 
             for j in range(num_layers):
                 # create_module_fn is additionally supplied with a dictionary
-                # containing information about
+                # containing information about the whereabouts of the current
+                # module.
                 coordinate_kwargs = {
                     'dim': self.dim,
                     'branch': 'encoder',
@@ -367,6 +370,7 @@ class iUNet(nn.Module):
                     )
                 )
 
+                # Rules for channel mixing
                 if self.channel_mixing_freq == -1 and i!=len(architecture)-1:
                     if j == 0:
                         add_channel_mixing(self, self.decoder_modules[i])
