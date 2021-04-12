@@ -51,7 +51,7 @@ class iUNet(nn.Module):
         signature ``create_module_fn(in_channels, **kwargs)``.
         Additional keyword arguments passed on via ``kwargs`` are
         ``dim`` (whether this is a 1D, 2D or 3D iUNet), the coordinates
-        of the specific module within the iUNet (``LR``, ``level`` and
+        of the specific module within the iUNet (``branch``, ``level`` and
         ``module_index``) as well as ``architecture``. By default, this creates
         an additive coupling layer, whose block consists of a number of
         convolutional layers, followed by a `leaky ReLU` activation function
@@ -341,7 +341,7 @@ class iUNet(nn.Module):
                 # containing information about
                 coordinate_kwargs = {
                     'dim': self.dim,
-                    'LR': 'L',
+                    'branch': 'encoder',
                     'level': i,
                     'module_index': j,
                     'architecture': self.architecture,
@@ -356,7 +356,7 @@ class iUNet(nn.Module):
                     )
                 )
 
-                coordinate_kwargs['LR'] = 'R'
+                coordinate_kwargs['branch'] = 'decoder'
                 self.decoder_modules[i].append(
                     InvertibleModuleWrapper(
                         create_module_fn(
