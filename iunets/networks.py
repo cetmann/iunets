@@ -56,11 +56,11 @@ class iUNet(nn.Module):
         an additive coupling layer, whose block consists of a number of
         convolutional layers, followed by a `leaky ReLU` activation function
         and an instance normalization layer. The number of blocks can be
-        controlled by setting ``"block_depth"`` in ``module_kwargs``.
+        controlled by setting ``"depth"`` in ``module_kwargs``.
     :param module_kwargs:
         ``dict`` of optional, additional keyword arguments that are
         passed on to ``create_module_fn``.
-    :param slice_mode:
+    :param channel_growth:
         Controls the fraction of channels, which gets invertibly
         downsampled. E.g. ``"double"`` slices off just enough channels, such
         that after invertibly downsampling, there are (as close as possible)
@@ -124,13 +124,12 @@ class iUNet(nn.Module):
         Defaults to ``1``.
     """
     def __init__(self,
-                 in_channels: int,
+                 channels: Tuple[int, ...],
                  architecture: Tuple[int, ...],
                  dim: int,
                  create_module_fn: CreateModuleFnType
                     = create_standard_module,
                  module_kwargs: dict = None,
-                 slice_mode: str = "double",
                  learnable_resampling: bool = True,
                  resampling_stride: int = 2,
                  resampling_method: str = "cayley",
@@ -158,7 +157,11 @@ class iUNet(nn.Module):
             module_kwargs = {}
         self.module_kwargs = module_kwargs
 
-        self.channels = [in_channels]
+        if len(channels) != len(architecture):
+            raise AttributeError(
+                "channels must have the same length as architecture."
+            )
+        self.channels = [channels[0]]
         self.channels_before_downsampling = []
         self.skipped_channels = []
 
@@ -192,33 +195,41 @@ class iUNet(nn.Module):
             channel_mixing_kwargs = {}
         self.channel_mixing_kwargs = channel_mixing_kwargs
 
-        # Standard behavior of self.slice_mode
-        if slice_mode is "double" or slice_mode is "constant":
-            if slice_mode is "double": factor = 2
-            if slice_mode is "constant": factor = 1
+        # --- Setting up the required channel numbers ---
+        # The user-specified channel numbers can potentially not be enforced.
+        # Hence, we choose the best possible approximation.
+        desired_channels = channels
+        channel_errors = [] # Measure how far we are off.
 
-            for i in range(len(architecture)-1):
-                self.skipped_channels.append(
-                    int(
-                        max([1, np.floor(
-                                (self.channels[i] *
-                                 (self.channel_multipliers[i] - factor))
-                                / self.channel_multipliers[i])]
-                            )
-                    )
+        for i in range(len(architecture)-1):
+            factor = desired_channels[i+1] / self.channels[i]
+            self.skipped_channels.append(
+                    int(max([1, np.round((self.channels[i] * (self.channel_multipliers[i] - factor)) / self.channel_multipliers[i])])
                 )
-                self.channels_before_downsampling.append(
-                        self.channels[i] - self.skipped_channels[-1]
-                )
-                self.channels.append(
-                    self.channel_multipliers[i]
-                    * self.channels_before_downsampling[i]
-                )
-        else:
-            raise AttributeError(
-                "Currently, only slice_mode='double' and 'constant' are "
-                "supported."
             )
+            self.channels_before_downsampling.append(
+                    self.channels[i] - self.skipped_channels[-1]
+            )
+            self.channels.append(
+                self.channel_multipliers[i]
+                * self.channels_before_downsampling[i]
+            )
+
+            channel_errors.append(abs(self.channels[i] - desired_channels[i]) / desired_channels[i])
+
+        if channels != self.channels:
+            print(
+                "Could not exactly create an iUNet with channels={} and "
+                "resampling_stride={}. Instead using closest achievable "
+                "configuration: channels={}. Average relative error: {}".format(
+                    channels,
+                    self.resampling_stride,
+                    self.channels,
+                    np.mean(channel_errors)
+                )
+            )
+
+
 
         # Verbosity level
         self.verbose = verbose
