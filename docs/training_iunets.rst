@@ -6,13 +6,14 @@ In this tutorial, we will demonstrate how to use invertible U-Net (iUNet) as
 part of a model built in Pytorch. Despite having a custom backpropagation
 implementation, any iUNet can be used e.g. as a submodule in a larger neural
 network architecture, as well as be trained like any other neural network in
-Pyroch.
+Pytorch.
 
 An invertible toy problem
 -------------------------
 
 In the following, we will train an iUNet to *mirror* the input image as a
-warm-up.
+warm-up. This will not work particularly well with the small network, but
+it allows us to
 
 Setting up the data loading
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -47,26 +48,28 @@ Defining an iUNet
 .. code:: python
 
     model = iUNet(
-        in_channels=3,
+        channels=(3,8,16,32,40),
         dim=2,
-        architecture=(4,4,4,4,4)
-    ).to('cuda')
+        architecture=(2,2,2,2,2)
+    )
+    model = model.to('cuda')
 
     model.print_layout()
 
-Here, ``in_channels`` defines the number of input channels, ``dim=2`` signifies,
-that we are using 2D data (images). ``architecture=(4,4,4,4,4)`` defines the
-number of *resolution-preserving
-The call to ``model.print_layout()`` now prints the layout of the above-defined
-iUNet:
+Here, ``channels`` defines the number of channels at each resolution,
+``dim=2`` signifies, that we are using 2D data (images).
+``architecture=(2,2,2,2,2)`` defines the number of resolution-preserving layers
+at each resolution, both for the encoding (downsampling) branch and the
+decoding (upsampling) branch. The call to ``model.print_layout()`` now prints
+the layout of the above-defined iUNet:
 
 .. code:: text
 
-    3-3-3-3-(1/2)----------------------------------------------------------------------------------------------------(1/2)-3-3-3-3
-    ----------8-8-8-8-(4/4)-------------------------------------------------------------------------------(4/4)-8-8-8-8-----------
-    ---------------------16-16-16-16-(8/8)--------------------------------------------------(8/8)-16-16-16-16---------------------
-    -----------------------------------32-32-32-32-(16/16)-----------------(16/16)-32-32-32-32------------------------------------
-    ---------------------------------------------------64-64-64-64--64-64-64-64---------------------------------------------------
+    3-3-(1/2)--------------------------------------------------------(1/2)-3-3
+    ------8-8-(4/4)-------------------------------------------(4/4)-8-8-------
+    -------------16-16-(8/8)--------------------------(8/8)-16-16-------------
+    ---------------------32-32-(22/10)-----(22/10)-32-32----------------------
+    -------------------------------40-40--40-40-------------------------------
 
 Here, each number represents the number of channels. The expressions in
 parentheses denote the splitting of channels, a part of which is then
@@ -117,9 +120,11 @@ automatically used in the invertible portions of the network, i.e. the iUNet.
     from iunets import iUNet
 
     INPUT_CHANNELS = 3
-    INTERMEDIATE_CHANNELS = 64
+    CHANNELS = (64, 128, 256, 384, 384)
+    INTERMEDIATE_CHANNELS = CHANNELS[0]
     OUTPUT_CHANNELS = 10
 
+    # Conv layer to go from INPUT_CHANNELS to INTERMEDIATE_CHANNELS
     input_layer = nn.Conv3d(
         INPUT_CHANNELS,
         INTERMEDIATE_CHANNELS,
@@ -127,12 +132,14 @@ automatically used in the invertible portions of the network, i.e. the iUNet.
         padding=1
     )
 
+    # The iUNet, with the specified architecture
     iunet = iUNet(
-        in_channels=INTERMEDIATE_CHANNELS,
+        channels=CHANNELS,
         dim=3,
-        architecture=(2,3,4)
+        architecture=(2,3,4,4,2)
     )
 
+    # Conv layer from INTERMEDIATE_CHANNELS to OUTPUT_CHANNELS
     output_layer = nn.Conv3d(
         INTERMEDIATE_CHANNELS,
         OUTPUT_CHANNELS,
@@ -141,5 +148,8 @@ automatically used in the invertible portions of the network, i.e. the iUNet.
     )
 
     # Chain all sub-networks together
-    model = nn.Sequential(input_layer, iunet, output_layer).to('cuda')
+    model = nn.Sequential(input_layer, iunet, output_layer)
+    model = model.to('cuda')
+
+    iunet.print_layout()
 
