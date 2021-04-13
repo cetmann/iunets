@@ -132,7 +132,7 @@ documentation for more information.
     model = iUNet(
         channels=(7,15,35,91),
         dim=3,
-        architecture=[2,3,1,3],
+        architecture=(2,3,1,3),
         create_module_fn=create_standard_module,
         module_kwargs={'depth': 3},
         slice_mode='double',
