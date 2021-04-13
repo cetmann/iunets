@@ -116,7 +116,7 @@ controlled in the iUNet constructor.
 
     from iunets import iUNet
     model = iUNet(
-        in_channels=32,
+        channels=(32,64,128,256),
         dim=3,
         architecture=(2,2,2,2),
         resampling_stride=2,
@@ -200,33 +200,45 @@ number of channels does not increase by this factor of 8 with each decreasing
 resolution level: This is because invertibly downsampling a pre-specified number
 of channels gets sliced off (for later re-concatenation in the decoding portion
 of the iUNet). The number of sliced-off channels thus determines the factor
-by which the number of channels changes in each resolution level. This can
-be controlled with the keyword ``slice_mode``. Currently supported modes are
-``"double"`` (resulting in an effective doubling of channels in each
-resolution level) and ``"constant"``. The number of sliced-off channels is
-automatically chosen to best fulfill this requirement, even if it is not
-possible to exactly enforce an e.g. doubling of channels.
+by which the number of channels changes in each resolution level.
+
+This means that not any specific setting for ``channels`` can be enforced.
+However, the most
 
 Example:
 
 .. code:: python
 
     model = iUNet(
-        in_channels=3,
+        channels=(3,25,32,55,128),
         dim=3,
-        architecture=[2,2,2,2],
-        resampling_stride=[(1,2,3),(2,2,2),(5,1,2)]
+        architecture=(2,2,2,2,2),
+        resampling_stride=[(1,2,3),(2,2,2),(5,1,2),2]
     )
     model.print_layout()
+
+    print("Channel multipliers: {}".format(model.channel_multipliers))
+    print("Downsampling factors: {}".format(model.downsampling_factors))
 
 Output:
 
 .. code:: text
 
-    3-3-(2/1)--------------------------------------(2/1)-3-3
-    ------6-6-(4/2)-------------------------(4/2)-6-6-------
-    -------------16-16-(12/4)------(12/4)-16-16-------------
-    ----------------------40-40--40-40----------------------
+    Could not exactly create an iUNet with channels=(3, 25, 32, 55, 128)
+    and resampling_stride=[(1, 2, 3), (2, 2, 2), (5, 1, 2), (2, 2, 2)].
+    Instead using closest achievable configuration: channels=[3, 12, 32, 60, 128].
+    Average relative error: 0.1527
 
-**Note**: The ``slice_mode`` API might change in the near future to allow
-for more flexibility.
+    3-3-(1/2)-----------------------------------------------------------------(1/2)-3-3
+    ------12-12-(8/4)------------------------------------------------(8/4)-12-12-------
+    ---------------32-32-(26/6)-----------------------------(26/6)-32-32---------------
+    ------------------------60-60-(44/16)---------(44/16)-60-60------------------------
+    ---------------------------------128-128--128-128----------------------------------
+
+    Channel multipliers: [6, 8, 10, 8]
+    Downsampling factors: (20, 8, 24)
+
+Here, the `channel multipliers` are the products of the resampling factors over
+all spatial dimensions (e.g. ``1*2*3=6`` for the first downsampling operation),
+whereas the `downsampling factors` denote, by how much the input data is
+downsampled in total (e.g. ``1*2*5*2=20`` for the first coordinate).
