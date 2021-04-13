@@ -30,10 +30,10 @@ class iUNet(nn.Module):
     This model can be used for memory-efficient backpropagation, e.g. in
     high-dimensional (such as 3D) segmentation tasks.
 
-    :param in_channels:
-        The number of input channels, which is then also the number of output
-        channels. Can also be the complete input shape (without batch
-        dimension).
+    :param channels:
+        The number of channels at each resolution. For example: If one wants
+        5 resolution levels (i.e. 3 up-/downsampling operations), it should be
+        a tuple of 4 numbers, e.g. ``(32,64,128,256,384)``.
     :param architecture:
         Determines the number of invertible layers at each
         resolution (both left and right), e.g. ``[2,3,4]`` results in the
@@ -41,7 +41,7 @@ class iUNet(nn.Module):
             2-----2
              3---3
               4-4
-
+        Must be the same length as ``channels``.
     :param dim: Either ``1``, ``2`` or ``3``, signifying whether a 1D, 2D or 3D
         invertible U-Net should be created.
     :param create_module_fn:
@@ -51,22 +51,15 @@ class iUNet(nn.Module):
         signature ``create_module_fn(in_channels, **kwargs)``.
         Additional keyword arguments passed on via ``kwargs`` are
         ``dim`` (whether this is a 1D, 2D or 3D iUNet), the coordinates
-        of the specific module within the iUNet (``LR``, ``level`` and
+        of the specific module within the iUNet (``branch``, ``level`` and
         ``module_index``) as well as ``architecture``. By default, this creates
         an additive coupling layer, whose block consists of a number of
         convolutional layers, followed by a `leaky ReLU` activation function
         and an instance normalization layer. The number of blocks can be
-        controlled by setting ``"block_depth"`` in ``module_kwargs``.
+        controlled by setting ``"depth"`` in ``module_kwargs``.
     :param module_kwargs:
         ``dict`` of optional, additional keyword arguments that are
         passed on to ``create_module_fn``.
-    :param slice_mode:
-        Controls the fraction of channels, which gets invertibly
-        downsampled. E.g. ``"double"`` slices off just enough channels, such
-        that after invertibly downsampling, there are (as close as possible)
-        twice as many channels as before slicing.
-        Currently supported modes: ``"double"``, ``"constant"``.
-        Defaults to ``"double"``.
     :param learnable_resampling:
         Whether to train the invertible learnable up- and downsampling
         or to leave it at the initialized values.
@@ -98,10 +91,21 @@ class iUNet(nn.Module):
     :param resampling_kwargs:
         ``dict`` of optional, additional keyword arguments that are
         passed on to the invertible up- and downsampling modules.
-    :param disable_custom_gradient:
-        If set to ``True``, `normal backpropagation` (i.e. storing
-        activations instead of reconstructing activations) is used.
-        Defaults to ``False``.
+    :param channel_mixing_freq:
+        How often an `invertible channel mixing` is applied, which is (in 2D)
+        is an orthogonal 1x1-convolution. ``-1`` means that this will only be
+        applied before the channel splitting and before the recombination in the
+        decoder branch. For any other ``n``, this means that every ``n``-th
+        module is followed by an invertible channel mixing. In particular,``0``
+        deactivates the usage of invertible channel mixing.
+        Defaults to ``-1``.
+    :param channel_mixing_method:
+        How the orthogonal matrix for invertible channel mixing is parametrized.
+        Same has ``resampling_method``.
+        Defaults to ``"cayley"``.
+    :param channel_mixing_kwargs:
+        ``dict`` of optional, additional keyword arguments that are
+        passed on to the invertible channel mixing modules.
     :param padding_mode:
         If downsampling is not possible without residue
         (e.g. when halving spatial odd-valued resolutions), the
@@ -118,19 +122,22 @@ class iUNet(nn.Module):
         Whether to revert the input padding in the output, such that the
         input resolution is preserved, even when padding is required.
         Defaults to ``True``.
+    :param disable_custom_gradient:
+        If set to ``True``, `normal backpropagation` (i.e. storing
+        activations instead of reconstructing activations) is used.
+        Defaults to ``False``.
     :param verbose:
         Level of verbosity. Currently only 0 (no warnings) or 1,
         which includes warnings.
         Defaults to ``1``.
     """
     def __init__(self,
-                 in_channels: int,
+                 channels: Tuple[int, ...],
                  architecture: Tuple[int, ...],
                  dim: int,
                  create_module_fn: CreateModuleFnType
                     = create_standard_module,
                  module_kwargs: dict = None,
-                 slice_mode: str = "double",
                  learnable_resampling: bool = True,
                  resampling_stride: int = 2,
                  resampling_method: str = "cayley",
@@ -158,7 +165,11 @@ class iUNet(nn.Module):
             module_kwargs = {}
         self.module_kwargs = module_kwargs
 
-        self.channels = [in_channels]
+        if len(channels) != len(architecture):
+            raise AttributeError(
+                "channels must have the same length as architecture."
+            )
+        self.channels = [channels[0]]
         self.channels_before_downsampling = []
         self.skipped_channels = []
 
@@ -192,38 +203,48 @@ class iUNet(nn.Module):
             channel_mixing_kwargs = {}
         self.channel_mixing_kwargs = channel_mixing_kwargs
 
-        # Standard behavior of self.slice_mode
-        if slice_mode is "double" or slice_mode is "constant":
-            if slice_mode is "double": factor = 2
-            if slice_mode is "constant": factor = 1
+        # --- Setting up the required channel numbers ---
+        # The user-specified channel numbers can potentially not be enforced.
+        # Hence, we choose the best possible approximation.
+        desired_channels = channels
+        channel_errors = [] # Measure how far we are off.
 
-            for i in range(len(architecture)-1):
-                self.skipped_channels.append(
-                    int(
-                        max([1, np.floor(
-                                (self.channels[i] *
-                                 (self.channel_multipliers[i] - factor))
-                                / self.channel_multipliers[i])]
-                            )
-                    )
-                )
-                self.channels_before_downsampling.append(
-                        self.channels[i] - self.skipped_channels[-1]
-                )
-                self.channels.append(
-                    self.channel_multipliers[i]
-                    * self.channels_before_downsampling[i]
-                )
-        else:
-            raise AttributeError(
-                "Currently, only slice_mode='double' and 'constant' are "
-                "supported."
+        for i in range(len(architecture)-1):
+            factor = desired_channels[i+1] / self.channels[i]
+            skip_fraction = (self.channel_multipliers[i] - factor) \
+                               / self.channel_multipliers[i]
+            self.skipped_channels.append(
+                    int(max([1, np.round(self.channels[i] * skip_fraction)]))
+            )
+            self.channels_before_downsampling.append(
+                    self.channels[i] - self.skipped_channels[-1]
+            )
+            self.channels.append(
+                self.channel_multipliers[i]
+                * self.channels_before_downsampling[i]
             )
 
-        # Verbosity level
+            channel_errors.append(
+                abs(self.channels[i] - desired_channels[i])
+                / desired_channels[i]
+            )
+
+        if list(channels) != list(self.channels):
+            print(
+                "Could not exactly create an iUNet with channels={} and "
+                "resampling_stride={}. Instead using closest achievable "
+                "configuration: channels={}. Average relative error: {}".format(
+                    channels,
+                    self.resampling_stride,
+                    self.channels,
+                    np.mean(channel_errors)
+                )
+            )
+
+        # --- Verbosity level ---
         self.verbose = verbose
 
-        # Create the architecture of the iUNet
+        # --- Create the architecture of the iUNet ---
         downsampling_op = [InvertibleDownsampling1D,
                            InvertibleDownsampling2D,
                            InvertibleDownsampling3D][dim-1]
@@ -327,10 +348,11 @@ class iUNet(nn.Module):
 
             for j in range(num_layers):
                 # create_module_fn is additionally supplied with a dictionary
-                # containing information about
+                # containing information about the whereabouts of the current
+                # module.
                 coordinate_kwargs = {
                     'dim': self.dim,
-                    'LR': 'L',
+                    'branch': 'encoder',
                     'level': i,
                     'module_index': j,
                     'architecture': self.architecture,
@@ -345,7 +367,7 @@ class iUNet(nn.Module):
                     )
                 )
 
-                coordinate_kwargs['LR'] = 'R'
+                coordinate_kwargs['branch'] = 'decoder'
                 self.decoder_modules[i].append(
                     InvertibleModuleWrapper(
                         create_module_fn(
@@ -356,6 +378,7 @@ class iUNet(nn.Module):
                     )
                 )
 
+                # Rules for channel mixing
                 if self.channel_mixing_freq == -1 and i!=len(architecture)-1:
                     if j == 0:
                         add_channel_mixing(self, self.decoder_modules[i])
