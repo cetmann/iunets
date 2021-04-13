@@ -6,13 +6,14 @@ In this tutorial, we will demonstrate how to use invertible U-Net (iUNet) as
 part of a model built in Pytorch. Despite having a custom backpropagation
 implementation, any iUNet can be used e.g. as a submodule in a larger neural
 network architecture, as well as be trained like any other neural network in
-Pyroch.
+Pytorch.
 
 An invertible toy problem
 -------------------------
 
 In the following, we will train an iUNet to *mirror* the input image as a
-warm-up.
+warm-up. This will not work particularly well with the small network, but
+it allows us to
 
 Setting up the data loading
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -47,26 +48,27 @@ Defining an iUNet
 .. code:: python
 
     model = iUNet(
-        in_channels=3,
+        channels=(3,8,16,32,40),
         dim=2,
-        architecture=(4,4,4,4,4)
+        architecture=(2,2,2,2,2),
+        resampling_method='exp'
     ).to('cuda')
 
     model.print_layout()
 
-Here, ``in_channels`` defines the number of input channels, ``dim=2`` signifies,
-that we are using 2D data (images). ``architecture=(4,4,4,4,4)`` defines the
-number of *resolution-preserving
+Here, ``channels`` defines the number of channels at each resolution,
+``dim=2`` signifies, that we are using 2D data (images).
+``architecture=(2,2,2,2,2)`` defines the number of resolution-preserving layers.
 The call to ``model.print_layout()`` now prints the layout of the above-defined
 iUNet:
 
 .. code:: text
 
-    3-3-3-3-(1/2)----------------------------------------------------------------------------------------------------(1/2)-3-3-3-3
-    ----------8-8-8-8-(4/4)-------------------------------------------------------------------------------(4/4)-8-8-8-8-----------
-    ---------------------16-16-16-16-(8/8)--------------------------------------------------(8/8)-16-16-16-16---------------------
-    -----------------------------------32-32-32-32-(16/16)-----------------(16/16)-32-32-32-32------------------------------------
-    ---------------------------------------------------64-64-64-64--64-64-64-64---------------------------------------------------
+    3-3-(1/2)--------------------------------------------------------(1/2)-3-3
+    ------8-8-(4/4)-------------------------------------------(4/4)-8-8-------
+    -------------16-16-(8/8)--------------------------(8/8)-16-16-------------
+    ---------------------32-32-(22/10)-----(22/10)-32-32----------------------
+    -------------------------------40-40--40-40-------------------------------
 
 Here, each number represents the number of channels. The expressions in
 parentheses denote the splitting of channels, a part of which is then
