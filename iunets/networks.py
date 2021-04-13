@@ -229,7 +229,7 @@ class iUNet(nn.Module):
                 / desired_channels[i]
             )
 
-        if channels != self.channels:
+        if list(channels) != list(self.channels):
             print(
                 "Could not exactly create an iUNet with channels={} and "
                 "resampling_stride={}. Instead using closest achievable "
