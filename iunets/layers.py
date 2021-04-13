@@ -361,26 +361,52 @@ class ConcatenateChannels(torch.nn.Module):
         del x
         return a, b
 
+class AdditiveCoupling(nn.Module):
+    """Additive coupling layer, a basic invertible layer.
 
-class StandardAdditiveCoupling(nn.Module):
+    By splitting the input activation :math:`x` and output activation :math:`y`
+    into two groups of channels (i.e. :math:`(x_1, x_2) \cong x` and
+    :math:`(y_1, y_2) \cong y`), `additive coupling layers` define an invertible
+    mapping :math:`x \mapsto y` via
+
+    .. math::
+
+       y_1 &= x_2
+
+       y_2 &= x_1 + F(x_2),
+
+    where the `coupling function` :math:`F` is an (almost) arbitrary mapping.
+    :math:`F` just has to map from the space of :math:`x_2` to the space of
+    :math:`x_1`. In practice, this can for instance be a sequence of
+    convolutional layers with batch normalization.
+
+    The inverse of the above mapping is computed algebraically via
+
+    .. math::
+
+       x_1 &= y_2 - F(y_1)
+
+       x_2 &= y_1.
+
+    *Warning*: Note that this is different from the definition of additive
+    coupling layers in ``MemCNN``. Those are equivalent to two consecutive
+    instances of the above-defined additive coupling layers. Hence, the
+    variant implemented here is twice as memory-efficient as the variant from
+    ``MemCNN``.
+
+    :param F:
+        The coupling function of the additive coupling layer, typically a
+        sequence of neural network layers.
+    :param channel_split_pos:
+        The index of the channel at which the input and output activations are
+        split.
+
     """
-    This computes the output :math:`y` on forward given input :math:`x`
-    and arbitrary modules :math:`F` according to:
-    :math:`(x1, x2) = x`
+    def __init__(self,
+                 F: nn.Module,
+                 channel_split_pos: int):
 
-    :math:`y1 = x2`
-
-    :math:`y2 = x1 + F(y2)`
-
-    :math:`y = (y1, y2)`
-    Parameters
-    ----------
-        Fm : :obj:`torch.nn.Module`
-            A torch.nn.Module encapsulating an arbitrary function
-    """
-    def __init__(self, F, channel_split_pos):
-
-        super(StandardAdditiveCoupling, self).__init__()
+        super(AdditiveCoupling, self).__init__()
         self.F = F
         self.channel_split_pos = channel_split_pos
 
@@ -395,7 +421,8 @@ class StandardAdditiveCoupling(nn.Module):
     def inverse(self, y):
         # y1, y2 = torch.chunk(y, 2, dim=1)
         inverse_channel_split_pos = y.shape[1] - self.channel_split_pos
-        y1, y2 = y[:, :inverse_channel_split_pos], y[:, inverse_channel_split_pos:]
+        y1, y2 = (y[:, :inverse_channel_split_pos],
+                  y[:, inverse_channel_split_pos:])
         y1, y2 = y1.contiguous(), y2.contiguous()
         x2 = y1
         x1 = y2 - self.F.forward(y1)
@@ -408,12 +435,15 @@ class StandardBlock(nn.Module):
                  dim,
                  num_in_channels,
                  num_out_channels,
-                 block_depth=1,
-                 zero_init=True):
+                 block_depth=2,
+                 zero_init=False,
+                 normalization="instance",
+                 **kwargs):
         super(StandardBlock, self).__init__()
 
         conv_op = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim - 1]
 
+        print(dim, num_in_channels, num_out_channels, block_depth, zero_init, normalization, kwargs)
         self.seq = nn.ModuleList()
         self.num_in_channels = num_in_channels
         self.num_out_channels = num_out_channels
@@ -440,10 +470,31 @@ class StandardBlock(nn.Module):
                                            mode='fan_out',
                                            nonlinearity='leaky_relu')
 
+            if normalization is "instance":
+                norm_op = [nn.InstanceNorm1d,
+                           nn.InstanceNorm2d,
+                           nn.InstanceNorm3d][dim - 1]
+                self.seq.append(norm_op(current_out_channels, eps=1e-3))
+
+            elif normalization is "group":
+                self.seq.append(
+                    nn.GroupNorm(
+                        np.min(1, current_out_channels // 8),
+                        current_out_channels,
+                        eps=1e-3)
+                )
+
+            elif normalization is "batch":
+                norm_op = [nn.BatchNorm1d,
+                           nn.BatchNorm2d,
+                           nn.BatchNorm3d][dim - 1]
+                self.seq.append(norm_op(current_out_channels, eps=1e-3))
+
+            else:
+                print("No normalization specified.")
+
             self.seq.append(nn.LeakyReLU(inplace=True))
 
-            # With groups=1, group normalization becomes layer normalization
-            self.seq.append(nn.GroupNorm(1, current_out_channels, eps=1e-3))
 
         # Initialize the block as the zero transform, such that the coupling
         # becomes the coupling becomes an identity transform (up to permutation
@@ -457,6 +508,8 @@ class StandardBlock(nn.Module):
     def forward(self, x):
         x = self.F(x)
         return x
+
+
 
 
 def create_standard_module(in_channels, **kwargs):
@@ -473,12 +526,13 @@ def create_standard_module(in_channels, **kwargs):
         (num_F_in_channels, num_F_out_channels) = (
             num_F_out_channels, num_F_in_channels
         )
-    return StandardAdditiveCoupling(
+    return AdditiveCoupling(
         F=StandardBlock(
             dim,
             num_F_in_channels,
             num_F_out_channels,
-            block_depth=block_depth),
+            block_depth=block_depth,
+            **kwargs),
         channel_split_pos=num_F_out_channels
     )
 
@@ -620,6 +674,9 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
 
 
 class OrthogonalChannelMixing(nn.Module):
+    """Base class for all orthogonal channel mixing layers.
+
+    """
     def __init__(self,
                  in_channels: int,
                  method: str = 'cayley',
@@ -663,6 +720,21 @@ class OrthogonalChannelMixing(nn.Module):
 
 
 class InvertibleChannelMixing1D(OrthogonalChannelMixing):
+    """Orthogonal (and hence invertible) channel mixing layer for 1D data.
+
+    This layer linearly combines the input channels to each output channel.
+    Here, the number of output channels is the same as the number of input
+    channels, and the matrix specifying the connectivity between the channels
+    is orthogonal.
+
+    :param in_channels:
+        The number of input (and output) channels.
+    :param method:
+        The chosen method for parametrizing the orthogonal matrix which
+        determines the orthogonal channel mixing. Either ``"exp"``, ``"cayley"``
+        or ``"householder"``.
+
+    """
     def __init__(self,
                  in_channels: int,
                  method: str = 'cayley',
