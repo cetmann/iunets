@@ -1,6 +1,6 @@
-===================================================
-Tutorial 2: Invertible Resolution-Preserving Layers
-===================================================
+================================================
+Tutorial 2: Invertible Layers (Fixed Resolution)
+================================================
 
 Additive coupling layers
 ------------------------
@@ -145,11 +145,12 @@ Now we can plug the above-defined ``my_module_fn`` into an iUNet:
 
     # Create a iUNet with create_module_fn = my_module_fn
     model = iunets.iUNet(
-        in_channels = 32,
+        channels = (32,64,128),
         dim = 3,
         architecture = (2,3,4),
         create_module_fn = my_module_fn
-    ).to('cuda')
+    )
+    model = model.to('cuda')
 
     # Compute the output of the iUNet and reconstruct its input
     y = model(x)
@@ -186,12 +187,13 @@ nonlinearity can be specified via a string.
         return AdditiveCoupling(F, channel_split_pos)
 
     model = iunets.iUNet(
-        32,
+        channels=(32,64,128),
         dim = 3,
         architecture = (2,3,4),
         create_module_fn = my_customizable_module_fn,
         module_kwargs = {'nonlinearity': 'LeakyReLU'}
-    ).to('cuda')
+    )
+    model = model.to('cuda')
 
 For the default module creator ``iunets.layers.create_standard_module``,
 passable keywords are ``"block_depth"`` (which controls the number of
@@ -209,7 +211,7 @@ from optional keywords, ``kwargs`` also automatically includes basic
 information about the iUNet (``dim`` and ``architecture``), as well as the
 coordinates of the current module. These are:
 
-    * ``"LR"``, which denotes the left (``"L"``, the encoding part) or the right (``"R"``, the decoding part) of the iUNet
+    * ``"branch"``, which denotes the encoder (``"encoder"``, the downsampling branch) or the decoder (``"decoder"``, the upsampling branch) of the iUNet
     * ``"level"``, which denotes the index of the resolution level inside the iUNet, where ``0`` denotes the highest resolution
     * ``"module_index"``, which runs from ``0`` to ``architecture[level]-1``.
 
@@ -222,11 +224,13 @@ an instance normalization layer in the very last block of the iUNet.
 
 .. code:: python
 
+    import numpy as np
+
     def my_fine_grained_module_fn(in_channels, **kwargs):
         channel_split_pos = in_channels//2
 
         # Coordinates of the current module
-        LR = kwargs.get('LR')
+        branch = kwargs.get('branch')
         level = kwargs.get('level')
         module_index = kwargs.get('module_index')
 
@@ -245,13 +249,13 @@ an instance normalization layer in the very last block of the iUNet.
         nonlinearity = nn.ReLU()
         layers = [conv_layer, nonlinearity]
 
-        # In the very last layer, apply an instance normalization layer
-        if (LR is 'R' and
+        # In the very last layer, apply an instance normalization
+        if (branch is 'decoder' and
             level==0 and
             module_index==architecture[0]-1):
             print(
                 "Adding instance normalization in coordinate ({},{},{}).".format(
-                    LR, level, module_index
+                    branch, level, module_index
                 )
             )
 
@@ -262,10 +266,15 @@ an instance normalization layer in the very last block of the iUNet.
         return AdditiveCoupling(F, channel_split_pos)
 
     model = iunets.iUNet(
-        32,
+        channels=(32,64,128),
         dim = 3,
         architecture = [3,4,5],
         create_module_fn = my_fine_grained_module_fn
-    ).to('cuda')
+    )
+    model = model.to('cuda')
 
+Output:
 
+.. code-block:: text
+
+    Adding instance normalization in coordinate (decoder,0,2).
