@@ -99,8 +99,8 @@ downsampling branch (left) and the upsampling branch (right).
 
     from iunets import iUNet
     model = iUNet(
-        in_channels=64,
-        architecture=[2,2,2,2],
+        channels=(64,128,256,384),
+        architecture=(2,2,2,2),
         dim=2
     )
     model.print_layout()
@@ -130,21 +130,19 @@ documentation for more information.
     from iunets import iUNet
     from iunets.layers import create_standard_module
     model = iUNet(
-        in_channels=32,
+        channels=(7,15,35,91),
         dim=3,
-        architecture=[2,3,1,3],
+        architecture=(2,3,1,3),
         create_module_fn=create_standard_module,
-        module_kwargs={'block_depth': 3},
+        module_kwargs={'depth': 3},
         slice_mode='double',
-        resampling_stride=[(1,2,2), 2, (2,3,2)],
+        resampling_stride=[2,2,(1,2,2)],
         learnable_resampling=True,
-        resampling_init='squeeze',
+        resampling_init='haar',
         resampling_method='cayley',
         disable_custom_gradient=False,
         revert_input_padding=True,
         padding_mode='reflect',
-        channel_mixing_freq=2,
-        channel_mixing_method='exp',
         verbose=1
         )
     model.print_layout()
@@ -153,9 +151,14 @@ Output:
 
 .. code-block:: text
 
-    32-32-(16/16)----------------------------------------------------------(16/16)-32-32
-    ---------64-64-64-(48/16)---------------------------------(48/16)-64-64-64----------
-    ----------------------128-(106/22)----------------(106/22)-128----------------------
-    ------------------------------264-264-264--264-264-264------------------------------
+    Could not exactly create an iUNet with channels=(7, 15, 35, 91) and
+    resampling_stride=[(2, 2, 2), (2, 2, 2), (1, 2, 2)]. Instead using closest
+    achievable configuration: channels=(7, 16, 32, 92).
+    Average relative error: 0.0508
+
+    7-7-(5/2)-------------------------------------------------(5/2)-7-7
+    ------16-16-16-(12/4)------------------------(12/4)-16-16-16-------
+    ------------------32-(9/23)------------(9/23)-32-------------------
+    ------------------------92-92-92--92-92-92-------------------------
 
 

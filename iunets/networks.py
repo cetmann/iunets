@@ -229,6 +229,17 @@ class iUNet(nn.Module):
                 / desired_channels[i]
             )
 
+        # Convert to tuples (standard convention)
+        self.channels = tuple(
+            self.channels
+        )
+        self.channels_before_downsampling = tuple(
+            self.channels_before_downsampling
+        )
+        self.skipped_channels = tuple(
+            self.skipped_channels
+        )
+
         if list(channels) != list(self.channels):
             print(
                 "Could not exactly create an iUNet with channels={} and "
