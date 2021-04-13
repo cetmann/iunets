@@ -226,7 +226,7 @@ Output:
 
     Could not exactly create an iUNet with channels=(3, 25, 32, 55, 128)
     and resampling_stride=[(1, 2, 3), (2, 2, 2), (5, 1, 2), (2, 2, 2)].
-    Instead using closest achievable configuration: channels=[3, 12, 32, 60, 128].
+    Instead using closest achievable configuration: channels=(3, 12, 32, 60, 128).
     Average relative error: 0.1527
 
     3-3-(1/2)-----------------------------------------------------------------(1/2)-3-3
