@@ -30,10 +30,10 @@ class iUNet(nn.Module):
     This model can be used for memory-efficient backpropagation, e.g. in
     high-dimensional (such as 3D) segmentation tasks.
 
-    :param in_channels:
-        The number of input channels, which is then also the number of output
-        channels. Can also be the complete input shape (without batch
-        dimension).
+    :param channels:
+        The number of channels at each resolution. For example: If one wants
+        5 resolution levels (i.e. 3 up-/downsampling operations), it should be
+        a tuple of 4 numbers, e.g. ``(32,64,128,256,384)``.
     :param architecture:
         Determines the number of invertible layers at each
         resolution (both left and right), e.g. ``[2,3,4]`` results in the
@@ -41,7 +41,7 @@ class iUNet(nn.Module):
             2-----2
              3---3
               4-4
-
+        Must be the same length as ``channels``.
     :param dim: Either ``1``, ``2`` or ``3``, signifying whether a 1D, 2D or 3D
         invertible U-Net should be created.
     :param create_module_fn:
@@ -60,13 +60,6 @@ class iUNet(nn.Module):
     :param module_kwargs:
         ``dict`` of optional, additional keyword arguments that are
         passed on to ``create_module_fn``.
-    :param channel_growth:
-        Controls the fraction of channels, which gets invertibly
-        downsampled. E.g. ``"double"`` slices off just enough channels, such
-        that after invertibly downsampling, there are (as close as possible)
-        twice as many channels as before slicing.
-        Currently supported modes: ``"double"``, ``"constant"``.
-        Defaults to ``"double"``.
     :param learnable_resampling:
         Whether to train the invertible learnable up- and downsampling
         or to leave it at the initialized values.
@@ -98,10 +91,21 @@ class iUNet(nn.Module):
     :param resampling_kwargs:
         ``dict`` of optional, additional keyword arguments that are
         passed on to the invertible up- and downsampling modules.
-    :param disable_custom_gradient:
-        If set to ``True``, `normal backpropagation` (i.e. storing
-        activations instead of reconstructing activations) is used.
-        Defaults to ``False``.
+    :param channel_mixing_freq:
+        How often an `invertible channel mixing` is applied, which is (in 2D)
+        is an orthogonal 1x1-convolution. ``-1`` means that this will only be
+        applied before the channel splitting and before the recombination in the
+        decoder branch. For any other ``n``, this means that every ``n``-th
+        module is followed by an invertible channel mixing. In particular,``0``
+        deactivates the usage of invertible channel mixing.
+        Defaults to ``-1``.
+    :param channel_mixing_method:
+        How the orthogonal matrix for invertible channel mixing is parametrized.
+        Same has ``resampling_method``.
+        Defaults to ``"cayley"``.
+    :param channel_mixing_kwargs:
+        ``dict`` of optional, additional keyword arguments that are
+        passed on to the invertible channel mixing modules.
     :param padding_mode:
         If downsampling is not possible without residue
         (e.g. when halving spatial odd-valued resolutions), the
@@ -118,6 +122,10 @@ class iUNet(nn.Module):
         Whether to revert the input padding in the output, such that the
         input resolution is preserved, even when padding is required.
         Defaults to ``True``.
+    :param disable_custom_gradient:
+        If set to ``True``, `normal backpropagation` (i.e. storing
+        activations instead of reconstructing activations) is used.
+        Defaults to ``False``.
     :param verbose:
         Level of verbosity. Currently only 0 (no warnings) or 1,
         which includes warnings.
