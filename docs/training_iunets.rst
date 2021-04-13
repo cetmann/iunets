@@ -50,17 +50,18 @@ Defining an iUNet
     model = iUNet(
         channels=(3,8,16,32,40),
         dim=2,
-        architecture=(2,2,2,2,2),
-        resampling_method='exp'
-    ).to('cuda')
+        architecture=(2,2,2,2,2)
+    )
+    model = model.to('cuda')
 
     model.print_layout()
 
 Here, ``channels`` defines the number of channels at each resolution,
 ``dim=2`` signifies, that we are using 2D data (images).
-``architecture=(2,2,2,2,2)`` defines the number of resolution-preserving layers.
-The call to ``model.print_layout()`` now prints the layout of the above-defined
-iUNet:
+``architecture=(2,2,2,2,2)`` defines the number of resolution-preserving layers
+at each resolution, both for the encoding (downsampling) branch and the
+decoding (upsampling) branch. The call to ``model.print_layout()`` now prints
+the layout of the above-defined iUNet:
 
 .. code:: text
 
@@ -119,9 +120,11 @@ automatically used in the invertible portions of the network, i.e. the iUNet.
     from iunets import iUNet
 
     INPUT_CHANNELS = 3
-    INTERMEDIATE_CHANNELS = 64
+    CHANNELS = (64, 128, 256, 384, 384)
+    INTERMEDIATE_CHANNELS = CHANNELS[0]
     OUTPUT_CHANNELS = 10
 
+    # Conv layer to go from INPUT_CHANNELS to INTERMEDIATE_CHANNELS
     input_layer = nn.Conv3d(
         INPUT_CHANNELS,
         INTERMEDIATE_CHANNELS,
@@ -129,12 +132,14 @@ automatically used in the invertible portions of the network, i.e. the iUNet.
         padding=1
     )
 
+    # The iUNet, with the specified architecture
     iunet = iUNet(
-        in_channels=INTERMEDIATE_CHANNELS,
+        channels=CHANNELS,
         dim=3,
-        architecture=(2,3,4)
+        architecture=(2,3,4,4,2)
     )
 
+    # Conv layer from INTERMEDIATE_CHANNELS to OUTPUT_CHANNELS
     output_layer = nn.Conv3d(
         INTERMEDIATE_CHANNELS,
         OUTPUT_CHANNELS,
@@ -143,5 +148,8 @@ automatically used in the invertible portions of the network, i.e. the iUNet.
     )
 
     # Chain all sub-networks together
-    model = nn.Sequential(input_layer, iunet, output_layer).to('cuda')
+    model = nn.Sequential(input_layer, iunet, output_layer)
+    model = model.to('cuda')
+
+    iunet.print_layout()
 
