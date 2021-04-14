@@ -13,7 +13,7 @@ An invertible toy problem
 
 In the following, we will train an iUNet to *mirror* the input image as a
 warm-up. This will not work particularly well with the small network, but
-it allows us to
+it allows us to demonstrate a typical pipeline on a very small example.
 
 Setting up the data loading
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

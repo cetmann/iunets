@@ -203,7 +203,8 @@ of the iUNet). The number of sliced-off channels thus determines the factor
 by which the number of channels changes in each resolution level.
 
 This means that not any specific setting for ``channels`` can be enforced.
-However, the most
+Instead, here we automatically choose the best possible approximation to the
+intended choice of ``channels``.
 
 Example:
 
