@@ -54,9 +54,10 @@ class iUNet(nn.Module):
         of the specific module within the iUNet (``branch``, ``level`` and
         ``module_index``) as well as ``architecture``. By default, this creates
         an additive coupling layer, whose block consists of a number of
-        convolutional layers, followed by a `leaky ReLU` activation function
-        and an instance normalization layer. The number of blocks can be
-        controlled by setting ``"depth"`` in ``module_kwargs``.
+        convolutional layers, followed by an instance normalization layer and
+        a `leaky ReLU` activation function. The number of blocks can be
+        controlled by setting ``"depth"`` in ``module_kwargs``, whose default
+        value is ``2``.
     :param module_kwargs:
         ``dict`` of optional, additional keyword arguments that are
         passed on to ``create_module_fn``.
