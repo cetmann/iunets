@@ -473,14 +473,14 @@ class StandardBlock(nn.Module):
                 norm_op = [nn.InstanceNorm1d,
                            nn.InstanceNorm2d,
                            nn.InstanceNorm3d][dim - 1]
-                self.seq.append(norm_op(current_out_channels, eps=1e-3))
+                self.seq.append(norm_op(current_out_channels, affine=True))
 
             elif normalization is "group":
                 self.seq.append(
                     nn.GroupNorm(
                         np.min(1, current_out_channels // 8),
                         current_out_channels,
-                        eps=1e-3)
+                        affine=True)
                 )
 
             elif normalization is "batch":
