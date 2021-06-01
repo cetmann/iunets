@@ -86,13 +86,13 @@ class OrthogonalResamplingLayer(torch.nn.Module):
         self.kwargs = kwargs
 
         assert (method in ['exp', 'cayley', 'householder'])
-        if method is 'exp':
+        if method == 'exp':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_exp__
-        elif method is 'cayley':
+        elif method == 'cayley':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_cayley__
-        elif method is 'householder':
+        elif method == 'householder':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_householder__
 
@@ -469,13 +469,13 @@ class StandardBlock(nn.Module):
                                            mode='fan_out',
                                            nonlinearity='leaky_relu')
 
-            if normalization is "instance":
+            if normalization == "instance":
                 norm_op = [nn.InstanceNorm1d,
                            nn.InstanceNorm2d,
                            nn.InstanceNorm3d][dim - 1]
                 self.seq.append(norm_op(current_out_channels, affine=True))
 
-            elif normalization is "group":
+            elif normalization == "group":
                 self.seq.append(
                     nn.GroupNorm(
                         np.min(1, current_out_channels // 8),
@@ -483,7 +483,7 @@ class StandardBlock(nn.Module):
                         affine=True)
                 )
 
-            elif normalization is "batch":
+            elif normalization == "batch":
                 norm_op = [nn.BatchNorm1d,
                            nn.BatchNorm2d,
                            nn.BatchNorm3d][dim - 1]
@@ -574,20 +574,20 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
     
     # tbd: Givens, Householder, Bjork, give proper exception.
     assert(method in ['exp', 'cayley', 'householder'])
-    if method is 'householder':
+    if method == 'householder':
         warn('Householder parametrization not fully implemented yet. '
              'Only random initialization currently working.')
         init = 'random'
         
-    if init is 'random':
+    if init == 'random':
         return torch.randn(kernel_matrix_shape).to('dtype')
     
-    if init is 'haar' and set(stride) != {2}:
+    if init == 'haar' and set(stride) != {2}:
         print("Initialization 'haar' only available for stride 2.")
         print("Falling back to 'squeeze' transform...")
         init = 'squeeze'
     
-    if init is 'haar' and set(stride) == {2}:
+    if init == 'haar' and set(stride) == {2}:
         if method == 'exp':
             # The following matrices each parametrize the Haar transform when
             # exponentiating the skew symmetric matrix weight-weight.T
@@ -620,7 +620,7 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
             
             return torch.tensor(weight).repeat(num_matrices,1,1)
 
-        elif method is 'cayley':
+        elif method == 'cayley':
             # The following matrices parametrize a Haar kernel matrix
             # when applying the Cayley transform. These can be found by
             # applying an inverse Cayley transform to a Haar kernel matrix.
@@ -691,13 +691,13 @@ class OrthogonalChannelMixing(nn.Module):
         )
 
         assert (method in ['exp', 'cayley', 'householder'])
-        if method is 'exp':
+        if method == 'exp':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_exp__
-        elif method is 'cayley':
+        elif method == 'cayley':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_cayley__
-        elif method is 'householder':
+        elif method == 'householder':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_householder__
 
