@@ -169,7 +169,7 @@ class InvertibleUpsampling1D(OrthogonalResamplingLayer):
                  learnable: bool = True,
                  *args,
                  **kwargs):
-        stride = tuple(_pair(stride))
+        stride = tuple(_single(stride))
         channel_multiplier = int(np.prod(stride))
         self.in_channels = in_channels
         self.out_channels = in_channels // channel_multiplier
