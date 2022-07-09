@@ -519,7 +519,7 @@ class iUNet(nn.Module):
         if padded_shape is None or padding is None:
             padded_shape, padding = self.get_padding(x)
 
-        if padded_shape != x.shape[2:] and self.padding_mode is not None:
+        if padded_shape != list(x.shape[2:]) and self.padding_mode is not None:
             if self.verbose:
                 warnings.warn(
                     "Input resolution {} cannot be downsampled {}  times "
