@@ -48,6 +48,8 @@ jobs:
           enable-cache: true
       - run: uv python install 3.12
       - run: uv sync --frozen --python 3.12 --extra docs
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync sphinx-build -W -b html docs docs/_build/html
       - run: uv build
       - name: Install wheel and source distribution

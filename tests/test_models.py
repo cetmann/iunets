@@ -1,5 +1,5 @@
-from collections import OrderedDict
 import warnings
+from collections import OrderedDict
 
 import pytest
 import torch
@@ -14,7 +14,6 @@ from iunets.layers import (
     InvertibleUpsampling1D,
 )
 
-
 SHAPES = [
     (1, (4, 6), (1, 4, 8)),
     (2, (4, 8), (1, 4, 4, 6)),
@@ -28,20 +27,35 @@ def test_model_round_trip_and_gradient(dim, channels, shape, method):
     torch.manual_seed(7)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        model = IUNet(channels, (1, 1), dim, resampling_method=method,
-                      channel_mixing_method=method, verbose=0)
+        model = IUNet(
+            channels,
+            (1, 1),
+            dim,
+            resampling_method=method,
+            channel_mixing_method=method,
+            verbose=0,
+        )
     x = torch.randn(shape, requires_grad=True)
     y = model(x)
     torch.testing.assert_close(model.inverse(y), x, atol=2e-4, rtol=2e-4)
     y.square().mean().backward()
     assert torch.isfinite(x.grad).all()
-    assert all(torch.isfinite(p.grad).all() for p in model.parameters()
-               if p.requires_grad and p.grad is not None)
+    assert all(
+        torch.isfinite(p.grad).all()
+        for p in model.parameters()
+        if p.requires_grad and p.grad is not None
+    )
 
 
 def test_padding_and_anisotropic_stride():
-    model = IUNet((4, 8), (1, 1), 2, resampling_stride=(2, 1),
-                  revert_input_padding=False, verbose=0)
+    model = IUNet(
+        (4, 8),
+        (1, 1),
+        2,
+        resampling_stride=(2, 1),
+        revert_input_padding=False,
+        verbose=0,
+    )
     x = torch.randn(1, 4, 5, 7)
     assert model.get_padding(x) == ([6, 7], [0, 0, 0, 1])
     padded = model.pad(x)
@@ -64,9 +78,11 @@ def test_one_dimensional_upsampling_and_validation():
     layer = InvertibleUpsampling1D(6, stride=2)
     x = torch.randn(1, 6, 4)
     torch.testing.assert_close(layer.inverse(layer(x)), x)
-    for layer_cls, dim in ((InvertibleDownsampling1D, 1),
-                           (InvertibleDownsampling2D, 2),
-                           (InvertibleDownsampling3D, 3)):
+    for layer_cls, dim in (
+        (InvertibleDownsampling1D, 1),
+        (InvertibleDownsampling2D, 2),
+        (InvertibleDownsampling3D, 3),
+    ):
         with pytest.raises(ValueError, match="stride"):
             layer_cls(2, stride=(0,) * dim)
     with pytest.raises(ValueError, match="divisible"):
@@ -109,8 +125,9 @@ def test_custom_module_and_stateful_guidance():
     unsafe = IUNet((4,), (1,), 2, create_module_fn=Stochastic, verbose=0)
     with pytest.raises(RuntimeError, match="gradient_mode='autograd'"):
         unsafe(x)
-    direct = IUNet((4,), (1,), 2, create_module_fn=Stochastic,
-                   gradient_mode="autograd", verbose=0)
+    direct = IUNet(
+        (4,), (1,), 2, create_module_fn=Stochastic, gradient_mode="autograd", verbose=0
+    )
     direct(x)
 
 
@@ -137,8 +154,9 @@ def test_gradient_modes_and_second_derivatives():
     def derivatives(model):
         value = x.clone().requires_grad_()
         loss = model(value).square().sum()
-        first = torch.autograd.grad(loss, (value, *model.parameters()),
-                                    create_graph=True)
+        first = torch.autograd.grad(
+            loss, (value, *model.parameters()), create_graph=True
+        )
         second = torch.autograd.grad(first[0].square().sum(), value)[0]
         return loss, first, second
 
@@ -178,12 +196,13 @@ def test_saved_activation_storage_is_depth_independent():
     assert saved_activation_elements(5) == saved_activation_elements(1)
 
 
-@pytest.mark.parametrize("dim,shape", [(1, (1, 2, 8)),
-                                       (2, (1, 2, 8, 8)),
-                                       (3, (1, 2, 8, 8, 8))])
+@pytest.mark.parametrize(
+    "dim,shape", [(1, (1, 2, 8)), (2, (1, 2, 8, 8)), (3, (1, 2, 8, 8, 8))]
+)
 def test_standard_unet_smoke(dim, shape):
-    model = StandardUNet(2, dim=dim, architecture=(1, 1),
-                         base_filters=2, skip_connection=True)
+    model = StandardUNet(
+        2, dim=dim, architecture=(1, 1), base_filters=2, skip_connection=True
+    )
     x = torch.randn(shape, requires_grad=True)
     y = model(x)
     assert y.shape == x.shape

@@ -3,31 +3,37 @@ from __future__ import annotations
 import math
 import warnings
 from collections import OrderedDict
-
-from typing import Union, Iterable, Callable, Any, Tuple, Sized, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from torch import nn
 
-from .reconstruction import (Plan, ReversibleModule, Step, apply_autograd,
-                             apply_reconstruction)
-
-from .layers import (create_standard_module, 
-                     InvertibleDownsampling1D,
-                     InvertibleDownsampling2D,
-                     InvertibleDownsampling3D,
-                     InvertibleUpsampling1D,
-                     InvertibleUpsampling2D,
-                     InvertibleUpsampling3D,
-                     InvertibleChannelMixing1D,
-                     InvertibleChannelMixing2D,
-                     InvertibleChannelMixing3D,
-                     SplitChannels,
-                     ConcatenateChannels)
-
+from .layers import (
+    ConcatenateChannels,
+    InvertibleChannelMixing1D,
+    InvertibleChannelMixing2D,
+    InvertibleChannelMixing3D,
+    InvertibleDownsampling1D,
+    InvertibleDownsampling2D,
+    InvertibleDownsampling3D,
+    InvertibleUpsampling1D,
+    InvertibleUpsampling2D,
+    InvertibleUpsampling3D,
+    SplitChannels,
+    create_standard_module,
+)
+from .reconstruction import (
+    Plan,
+    ReversibleModule,
+    Step,
+    apply_autograd,
+    apply_reconstruction,
+)
 from .utils import print_iunet_layout
 
 CreateModuleFnType = Callable[..., nn.Module]
+
 
 class IUNet(nn.Module):
     """Fully-invertible U-Net (iUNet).
@@ -134,36 +140,43 @@ class IUNet(nn.Module):
         which includes warnings.
         Defaults to ``1``.
     """
-    def __init__(self,
-                 channels: Tuple[int, ...],
-                 architecture: Tuple[int, ...],
-                 dim: int,
-                 create_module_fn: CreateModuleFnType
-                    = create_standard_module,
-                 module_kwargs: dict = None,
-                 learnable_resampling: bool = True,
-                 resampling_stride: int = 2,
-                 resampling_method: str = "cayley",
-                 resampling_init: Any = "haar",
-                 resampling_kwargs: dict = None,
-                 learnable_channel_mixing: bool = True,
-                 channel_mixing_freq: int = -1,
-                 channel_mixing_method: str = 'cayley',
-                 channel_mixing_kwargs: dict = None,
-                 padding_mode: Union[str, type(None)] = "constant",
-                 padding_value: int = 0,
-                 revert_input_padding: bool = True,
-                 gradient_mode: str = "reconstruct",
-                 verbose: int = 1):
+
+    def __init__(
+        self,
+        channels: tuple[int, ...],
+        architecture: tuple[int, ...],
+        dim: int,
+        create_module_fn: CreateModuleFnType = create_standard_module,
+        module_kwargs: dict | None = None,
+        learnable_resampling: bool = True,
+        resampling_stride: int = 2,
+        resampling_method: str = "cayley",
+        resampling_init: Any = "haar",
+        resampling_kwargs: dict | None = None,
+        learnable_channel_mixing: bool = True,
+        channel_mixing_freq: int = -1,
+        channel_mixing_method: str = "cayley",
+        channel_mixing_kwargs: dict | None = None,
+        padding_mode: str | type(None) = "constant",
+        padding_value: int = 0,
+        revert_input_padding: bool = True,
+        gradient_mode: str = "reconstruct",
+        verbose: int = 1,
+    ):
 
         super().__init__()
 
         if dim not in (1, 2, 3):
             raise ValueError("dim must be 1, 2, or 3.")
-        if (not isinstance(channels, (tuple, list)) or
-                not isinstance(architecture, (tuple, list)) or
-                not architecture or len(channels) != len(architecture)):
-            raise ValueError("channels and architecture must have the same nonzero length.")
+        if (
+            not isinstance(channels, (tuple, list))
+            or not isinstance(architecture, (tuple, list))
+            or not architecture
+            or len(channels) != len(architecture)
+        ):
+            raise ValueError(
+                "channels and architecture must have the same nonzero length."
+            )
         if any(type(value) is not int or value <= 0 for value in channels):
             raise ValueError("channels must contain positive integers.")
         if any(type(value) is not int or value < 0 for value in architecture):
@@ -174,13 +187,17 @@ class IUNet(nn.Module):
             raise ValueError("channel_mixing_freq must be -1 or a nonnegative integer.")
         if not callable(create_module_fn):
             raise TypeError("create_module_fn must be callable.")
-        for name, value in (("module_kwargs", module_kwargs),
-                            ("resampling_kwargs", resampling_kwargs),
-                            ("channel_mixing_kwargs", channel_mixing_kwargs)):
+        for name, value in (
+            ("module_kwargs", module_kwargs),
+            ("resampling_kwargs", resampling_kwargs),
+            ("channel_mixing_kwargs", channel_mixing_kwargs),
+        ):
             if value is not None and not isinstance(value, dict):
                 raise TypeError(f"{name} must be a dictionary.")
         if padding_mode not in (None, "constant", "reflect", "replicate", "circular"):
-            raise ValueError("padding_mode must be a supported torch.nn.functional.pad mode or None.")
+            raise ValueError(
+                "padding_mode must be a supported torch.nn.functional.pad mode or None."
+            )
 
         self.architecture = architecture
         self.dim = dim
@@ -230,21 +247,21 @@ class IUNet(nn.Module):
         # The user-specified channel numbers can potentially not be enforced.
         # Hence, we choose the best possible approximation.
         desired_channels = channels
-        channel_errors = [] # Measure how far we are off.
+        channel_errors = []  # Measure how far we are off.
 
-        for i in range(len(architecture)-1):
-            factor = desired_channels[i+1] / self.channels[i]
-            skip_fraction = (self.channel_multipliers[i] - factor) \
-                               / self.channel_multipliers[i]
+        for i in range(len(architecture) - 1):
+            factor = desired_channels[i + 1] / self.channels[i]
+            skip_fraction = (
+                self.channel_multipliers[i] - factor
+            ) / self.channel_multipliers[i]
             self.skipped_channels.append(
-                    max(1, round(self.channels[i] * skip_fraction))
+                max(1, round(self.channels[i] * skip_fraction))
             )
             self.channels_before_downsampling.append(
-                    self.channels[i] - self.skipped_channels[-1]
+                self.channels[i] - self.skipped_channels[-1]
             )
             self.channels.append(
-                self.channel_multipliers[i]
-                * self.channels_before_downsampling[i]
+                self.channel_multipliers[i] * self.channels_before_downsampling[i]
             )
             if self.channels_before_downsampling[i] <= 0:
                 raise ValueError(
@@ -253,45 +270,40 @@ class IUNet(nn.Module):
                 )
 
             channel_errors.append(
-                abs(self.channels[i+1] - desired_channels[i+1])
-                / desired_channels[i+1]
+                abs(self.channels[i + 1] - desired_channels[i + 1])
+                / desired_channels[i + 1]
             )
 
         # Convert to tuples (standard convention)
-        self.channels = tuple(
-            self.channels
-        )
-        self.channels_before_downsampling = tuple(
-            self.channels_before_downsampling
-        )
-        self.skipped_channels = tuple(
-            self.skipped_channels
-        )
+        self.channels = tuple(self.channels)
+        self.channels_before_downsampling = tuple(self.channels_before_downsampling)
+        self.skipped_channels = tuple(self.skipped_channels)
 
         if list(channels) != list(self.channels) and self.verbose:
             warnings.warn(
-                "Could not exactly create an iUNet with channels={} and "
-                "resampling_stride={}. Instead using closest achievable "
-                "configuration: channels={}. Average relative error: {}".format(
-                    channels,
-                    self.resampling_stride,
-                    self.channels,
-                    sum(channel_errors) / len(channel_errors)
-                )
+                f"Could not exactly create an iUNet with channels={channels} and "
+                f"resampling_stride={self.resampling_stride}. Instead using closest achievable "
+                f"configuration: channels={self.channels}. Average relative error: {sum(channel_errors) / len(channel_errors)}"
             )
 
         # --- Create the architecture of the iUNet ---
-        downsampling_op = [InvertibleDownsampling1D,
-                           InvertibleDownsampling2D,
-                           InvertibleDownsampling3D][dim-1]
-        
-        upsampling_op = [InvertibleUpsampling1D,
-                         InvertibleUpsampling2D,
-                         InvertibleUpsampling3D][dim-1]
+        downsampling_op = [
+            InvertibleDownsampling1D,
+            InvertibleDownsampling2D,
+            InvertibleDownsampling3D,
+        ][dim - 1]
 
-        channel_mixing_op = [InvertibleChannelMixing1D,
-                             InvertibleChannelMixing2D,
-                             InvertibleChannelMixing3D][dim-1]
+        upsampling_op = [
+            InvertibleUpsampling1D,
+            InvertibleUpsampling2D,
+            InvertibleUpsampling3D,
+        ][dim - 1]
+
+        channel_mixing_op = [
+            InvertibleChannelMixing1D,
+            InvertibleChannelMixing2D,
+            InvertibleChannelMixing3D,
+        ][dim - 1]
 
         self.encoder_modules = nn.ModuleList()
         self.decoder_modules = nn.ModuleList()
@@ -301,8 +313,7 @@ class IUNet(nn.Module):
         self.upsampling_layers = nn.ModuleList()
 
         for i, num_layers in enumerate(architecture):
-            
-            if i < len(architecture)-1:
+            if i < len(architecture) - 1:
                 # Slice and concatenation layers
                 self.slice_layers.append(
                     ReversibleModule(SplitChannels(self.skipped_channels[i]))
@@ -318,43 +329,40 @@ class IUNet(nn.Module):
                     method=self.resampling_method,
                     init=self.resampling_init,
                     learnable=learnable_resampling,
-                    **resampling_kwargs
+                    **resampling_kwargs,
                 )
 
                 upsampling = upsampling_op(
-                    self.channels[i+1],
+                    self.channels[i + 1],
                     stride=self.resampling_stride[i],
                     method=self.resampling_method,
                     init=self.resampling_init,
                     learnable=learnable_resampling,
-                    **resampling_kwargs
+                    **resampling_kwargs,
                 )
-                
+
                 # Paired operators must start with the same orthogonal map.
                 with torch.no_grad():
                     upsampling.weight.copy_(downsampling.weight)
-                
-                self.downsampling_layers.append(
-                    ReversibleModule(downsampling)
-                )
-                
-                self.upsampling_layers.append(
-                    ReversibleModule(upsampling)
-                )
+
+                self.downsampling_layers.append(ReversibleModule(downsampling))
+
+                self.upsampling_layers.append(ReversibleModule(upsampling))
 
             self.encoder_modules.append(nn.ModuleList())
             self.decoder_modules.append(nn.ModuleList())
 
             # Shorthand for adding channel mixing layers, which all have the
             # same specifications.
-            def add_channel_mixing(obj, module_list):
+            def add_channel_mixing(obj, module_list, level):
                 module_list.append(
                     ReversibleModule(
                         channel_mixing_op(
-                            in_channels=obj.channels[i],
+                            in_channels=obj.channels[level],
                             method=obj.channel_mixing_method,
                             learnable=obj.learnable_channel_mixing,
-                            **obj.channel_mixing_kwargs)
+                            **obj.channel_mixing_kwargs,
+                        )
                     )
                 )
 
@@ -363,47 +371,48 @@ class IUNet(nn.Module):
                 # containing information about the whereabouts of the current
                 # module.
                 coordinate_kwargs = {
-                    'dim': self.dim,
-                    'branch': 'encoder',
-                    'level': i,
-                    'module_index': j,
-                    'architecture': self.architecture,
+                    "dim": self.dim,
+                    "branch": "encoder",
+                    "level": i,
+                    "module_index": j,
+                    "architecture": self.architecture,
                 }
                 self.encoder_modules[i].append(
                     ReversibleModule(
                         create_module_fn(
-                                 self.channels[i],
-                                 **coordinate_kwargs,
-                                 **module_kwargs)
+                            self.channels[i], **coordinate_kwargs, **module_kwargs
+                        )
                     )
                 )
 
-                coordinate_kwargs['branch'] = 'decoder'
+                coordinate_kwargs["branch"] = "decoder"
                 self.decoder_modules[i].append(
                     ReversibleModule(
                         create_module_fn(
-                                 self.channels[i],
-                                 **coordinate_kwargs,
-                                 **module_kwargs)
+                            self.channels[i], **coordinate_kwargs, **module_kwargs
+                        )
                     )
                 )
 
                 # Rules for channel mixing
-                if self.channel_mixing_freq == -1 and i!=len(architecture)-1:
+                if self.channel_mixing_freq == -1 and i != len(architecture) - 1:
                     if j == 0:
-                        add_channel_mixing(self, self.decoder_modules[i])
+                        add_channel_mixing(self, self.decoder_modules[i], i)
                     if j == num_layers - 1:
-                        add_channel_mixing(self, self.encoder_modules[i])
+                        add_channel_mixing(self, self.encoder_modules[i], i)
 
-                if (self.channel_mixing_freq > 0 and
-                    j % self.channel_mixing_freq == self.channel_mixing_freq-1):
-                    add_channel_mixing(self, self.encoder_modules[i])
-                    add_channel_mixing(self, self.decoder_modules[i])
+                if (
+                    self.channel_mixing_freq > 0
+                    and j % self.channel_mixing_freq == self.channel_mixing_freq - 1
+                ):
+                    add_channel_mixing(self, self.encoder_modules[i], i)
+                    add_channel_mixing(self, self.decoder_modules[i], i)
 
         encode_steps = []
         for i in range(self.num_levels):
-            encode_steps.extend(Step(module, 1, 1)
-                                for module in self.encoder_modules[i])
+            encode_steps.extend(
+                Step(module, 1, 1) for module in self.encoder_modules[i]
+            )
             if i < self.num_levels - 1:
                 encode_steps.append(Step(self.slice_layers[i], 1, 2))
                 encode_steps.append(Step(self.downsampling_layers[i], 1, 1))
@@ -413,32 +422,44 @@ class IUNet(nn.Module):
             if i < self.num_levels - 1:
                 decode_steps.append(Step(self.upsampling_layers[i], 1, 1))
                 decode_steps.append(Step(self.concat_layers[i], 2, 1))
-            decode_steps.extend(Step(module, 1, 1)
-                                for module in self.decoder_modules[i])
+            decode_steps.extend(
+                Step(module, 1, 1) for module in self.decoder_modules[i]
+            )
 
         self._encode_plan = Plan(encode_steps, 1)
         self._decode_plan = Plan(decode_steps, self.num_levels)
         self._decoder_inverse_plan = self._decode_plan.inverted()
         self._encoder_inverse_plan = self._encode_plan.inverted()
         self._has_stateful_modules = any(
-            isinstance(module, (nn.modules.batchnorm._BatchNorm,
-                                nn.modules.instancenorm._InstanceNorm, nn.Dropout,
-                                nn.Dropout1d, nn.Dropout2d, nn.Dropout3d))
-            and (not isinstance(module, (nn.modules.batchnorm._BatchNorm,
-                                        nn.modules.instancenorm._InstanceNorm))
-                 or module.track_running_stats)
+            isinstance(
+                module,
+                (
+                    nn.modules.batchnorm._BatchNorm,
+                    nn.modules.instancenorm._InstanceNorm,
+                    nn.Dropout,
+                    nn.Dropout1d,
+                    nn.Dropout2d,
+                    nn.Dropout3d,
+                ),
+            )
+            and (
+                not isinstance(
+                    module,
+                    (
+                        nn.modules.batchnorm._BatchNorm,
+                        nn.modules.instancenorm._InstanceNorm,
+                    ),
+                )
+                or module.track_running_stats
+            )
             for module in self.modules()
         )
 
     def get_padding(self, x: torch.Tensor):
-        """Calculates the required padding for the input.
-
-        """
+        """Calculates the required padding for the input."""
         shape = x.shape[2:]
         factors = self.downsampling_factors
-        padded_shape = [
-            ((s + f - 1) // f) * f for (s, f) in zip(shape, factors)
-        ]
+        padded_shape = [((s + f - 1) // f) * f for (s, f) in zip(shape, factors)]
         total_padding = [p - s for (s, p) in zip(shape, padded_shape)]
 
         # Pad evenly on all sides
@@ -452,9 +473,9 @@ class IUNet(nn.Module):
 
         return padded_shape, padding
 
-    def revert_padding(self, x: torch.Tensor, padding: List[int]):
+    def revert_padding(self, x: torch.Tensor, padding: list[int]):
         """Reverses a given padding.
-        
+
         :param x:
             The image that was originally padded.
         :param padding:
@@ -462,17 +483,22 @@ class IUNet(nn.Module):
         """
         shape = x.shape
         if self.dim == 1:
-            x = x[:, :,
-                  padding[0]:shape[2]-padding[1]]
+            x = x[:, :, padding[0] : shape[2] - padding[1]]
         if self.dim == 2:
-            x = x[:, :,
-                  padding[2]:shape[2]-padding[3],
-                  padding[0]:shape[3]-padding[1]]
+            x = x[
+                :,
+                :,
+                padding[2] : shape[2] - padding[3],
+                padding[0] : shape[3] - padding[1],
+            ]
         if self.dim == 3:
-            x = x[:, :,
-                  padding[4]:shape[2]-padding[5],
-                  padding[2]:shape[3]-padding[3],
-                  padding[0]:shape[4]-padding[1]]
+            x = x[
+                :,
+                :,
+                padding[4] : shape[2] - padding[5],
+                padding[2] : shape[3] - padding[3],
+                padding[0] : shape[4] - padding[1],
+            ]
 
         return x
 
@@ -485,6 +511,7 @@ class IUNet(nn.Module):
         list has to be equal to the number of downsampling operations),
         e.g. ``2`, ``(2,1,3)``, ``[(2,1,3), (2,2,2), (4,3,1)]``.
         """
+
         def raise_format_error():
             raise ValueError(
                 "resampling_stride has the wrong format. "
@@ -495,6 +522,7 @@ class IUNet(nn.Module):
                 "of downsampling operations), e.g. 2, (2,1,3), "
                 "[(2,1,3), (2,2,2), (4,3,1)]. "
             )
+
         if type(stride) is int:
             if stride <= 0:
                 raise_format_error()
@@ -505,7 +533,7 @@ class IUNet(nn.Module):
             else:
                 raise_format_error()
         elif isinstance(stride, list):
-            if len(stride) == self.num_levels-1:
+            if len(stride) == self.num_levels - 1:
                 for element in stride:
                     self.__check_stride_format__(element)
             else:
@@ -514,8 +542,7 @@ class IUNet(nn.Module):
             raise_format_error()
 
     def __format_stride__(self, stride):
-        """Parses the resampling_stride and reformats it into a standard format.
-        """
+        """Parses the resampling_stride and reformats it into a standard format."""
         if self.num_levels == 1:
             return []
         self.__check_stride_format__(stride)
@@ -524,25 +551,23 @@ class IUNet(nn.Module):
         if isinstance(stride, tuple):
             return [stride] * (self.num_levels - 1)
         if isinstance(stride, list):
-            return [((element,) * self.dim if isinstance(element, int)
-                     else element) for element in stride]
+            return [
+                ((element,) * self.dim if isinstance(element, int) else element)
+                for element in stride
+            ]
 
     def __total_downsampling_factor__(self, stride):
-        """Calculates the total downsampling factor per spatial dimension.
-        """
+        """Calculates the total downsampling factor per spatial dimension."""
         factors = [1] * self.dim
         for i, element_tuple in enumerate(stride):
-            for j, element_int in enumerate(stride[i]):
+            for j, element_int in enumerate(element_tuple):
                 factors[j] = factors[j] * element_int
         return tuple(factors)
 
     def pad(self, x, padded_shape=None, padding=None):
-        """Applies the chosen padding to the input, if required.
-        """
+        """Applies the chosen padding to the input, if required."""
         if self.padding_mode is None:
-            raise AttributeError(
-                "padding_mode in {} is set to None.".format(self)
-            )
+            raise AttributeError(f"padding_mode in {self} is set to None.")
 
         if padded_shape is None or padding is None:
             padded_shape, padding = self.get_padding(x)
@@ -550,55 +575,58 @@ class IUNet(nn.Module):
         if tuple(padded_shape) != tuple(x.shape[2:]):
             if self.verbose:
                 warnings.warn(
-                    "Input resolution {} cannot be downsampled {}  times "
-                    "without residuals. Padding to resolution {} is  applied "
-                    "with mode {} to retain invertibility. Set "
+                    f"Input resolution {list(x.shape[2:])} cannot be downsampled {len(self.architecture) - 1}  times "
+                    f"without residuals. Padding to resolution {padded_shape} is  applied "
+                    f"with mode {self.padding_mode} to retain invertibility. Set "
                     "padding_mode=None to deactivate padding. If so, expect "
-                    "errors.".format(
-                            list(x.shape[2:]),
-                            len(self.architecture)-1,
-                            padded_shape,
-                            self.padding_mode
-                        )
-                    )
+                    "errors."
+                )
 
             if self.padding_mode == "constant":
-                x = nn.functional.pad(x, padding, mode="constant",
-                                      value=self.padding_value)
+                x = nn.functional.pad(
+                    x, padding, mode="constant", value=self.padding_value
+                )
             else:
                 x = nn.functional.pad(x, padding, mode=self.padding_mode)
         return x
 
     def _apply_plan(self, plan: Plan, *inputs):
-        if self.gradient_mode == "reconstruct" and self.training and self._has_stateful_modules:
+        if (
+            self.gradient_mode == "reconstruct"
+            and self.training
+            and self._has_stateful_modules
+        ):
             raise RuntimeError(
                 "Reconstruction requires deterministic, side effect free modules in "
                 "training mode. Use gradient_mode='autograd' for dropout or "
                 "BatchNorm with running statistics."
             )
-        if self.gradient_mode == "autograd" or not torch.is_grad_enabled() or not plan.steps:
+        if (
+            self.gradient_mode == "autograd"
+            or not torch.is_grad_enabled()
+            or not plan.steps
+        ):
             return apply_autograd(plan, *inputs)
         return apply_reconstruction(plan, *inputs)
 
     def encode(self, x, use_padding=False):
-        """Encodes x, i.e. applies the contractive part of the iUNet.
-        """
+        """Encodes x, i.e. applies the contractive part of the iUNet."""
         if use_padding:
             x = self.pad(x)
         return self._apply_plan(self._encode_plan, x)
 
     def decode(self, *codes):
-        """Applies the expansive, i.e. decoding, portion of the iUNet.
-        """
+        """Applies the expansive, i.e. decoding, portion of the iUNet."""
         if len(codes) != self.num_levels:
             raise ValueError(f"decode expects {self.num_levels} code tensors.")
         return self._apply_plan(self._decode_plan, *codes)
 
     def forward(self, x: torch.Tensor):
-        """Applies the forward mapping of the iUNet to ``x``.
-        """
+        """Applies the forward mapping of the iUNet to ``x``."""
         if x.ndim != self.dim + 2:
-            raise ValueError(f"Expected a {self.dim + 2}D tensor (batch, channels, spatial dimensions).")
+            raise ValueError(
+                f"Expected a {self.dim + 2}D tensor (batch, channels, spatial dimensions)."
+            )
         if not x.shape[1] == self.channels[0]:
             raise ValueError(
                 f"Expected {self.channels[0]} input channels, got {x.shape[1]}."
@@ -615,24 +643,23 @@ class IUNet(nn.Module):
         return x
 
     def decoder_inverse(self, x, use_padding=False):
-        """Applies the inverse of the decoder portion of the iUNet.
-        """
+        """Applies the inverse of the decoder portion of the iUNet."""
         if use_padding:
             x = self.pad(x)
         return self._apply_plan(self._decoder_inverse_plan, x)
 
     def encoder_inverse(self, *codes):
-        """Applies the inverse of the encoder portion of the iUNet.
-        """
+        """Applies the inverse of the encoder portion of the iUNet."""
         if len(codes) != self.num_levels:
             raise ValueError(f"encoder_inverse expects {self.num_levels} code tensors.")
         return self._apply_plan(self._encoder_inverse_plan, *codes)
-    
+
     def inverse(self, x: torch.Tensor):
-        """Applies the inverse of the iUNet to ``x``.
-        """
+        """Applies the inverse of the iUNet to ``x``."""
         if x.ndim != self.dim + 2:
-            raise ValueError(f"Expected a {self.dim + 2}D tensor (batch, channels, spatial dimensions).")
+            raise ValueError(
+                f"Expected a {self.dim + 2}D tensor (batch, channels, spatial dimensions)."
+            )
         if not x.shape[1] == self.channels[0]:
             raise ValueError(
                 f"Expected {self.channels[0]} input channels, got {x.shape[1]}."
@@ -654,8 +681,7 @@ class IUNet(nn.Module):
         return x
 
     def print_layout(self):
-        """Prints the layout of the iUNet.
-        """
+        """Prints the layout of the iUNet."""
         print(self.layout())
 
     def layout(self) -> str:

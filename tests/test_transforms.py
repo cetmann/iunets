@@ -16,8 +16,9 @@ def test_torch_func_transforms():
     tangent = torch.ones_like(x)
     _, directional = torch.func.jvp(model, (x,), (tangent,))
     _, objective_directional = torch.func.jvp(objective, (x,), (tangent,))
-    torch.testing.assert_close(objective_directional, (gradient * tangent).sum(),
-                               atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(
+        objective_directional, (gradient * tangent).sum(), atol=1e-4, rtol=1e-4
+    )
     assert directional.shape == x.shape
     assert torch.isfinite(directional).all()
 

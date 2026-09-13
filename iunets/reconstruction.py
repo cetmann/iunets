@@ -6,8 +6,8 @@ are reconstructed one operation at a time, then differentiated locally.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 import torch
 from torch import nn
@@ -19,7 +19,7 @@ TORCH_23 = str(torch.__version__).startswith("2.3.")
 # dispatcher. Import it before entering a transform to avoid a circular
 # initialization failure in that release.
 if TORCH_23:
-    import torch._dynamo  # noqa: F401
+    import torch._dynamo
 
 
 def _tuple(value):
@@ -32,7 +32,9 @@ class ReversibleModule(nn.Module):
     def __init__(self, fn: nn.Module):
         super().__init__()
         if not isinstance(fn, nn.Module) or not callable(getattr(fn, "inverse", None)):
-            raise TypeError("Reversible modules must be nn.Module instances with inverse().")
+            raise TypeError(
+                "Reversible modules must be nn.Module instances with inverse()."
+            )
         self._fn = fn
 
     def forward(self, *inputs):
@@ -55,8 +57,13 @@ class _Call(nn.Module):
 
 
 class Step:
-    def __init__(self, module: ReversibleModule, num_inputs: int, num_outputs: int,
-                 reverse: bool = False):
+    def __init__(
+        self,
+        module: ReversibleModule,
+        num_inputs: int,
+        num_outputs: int,
+        reverse: bool = False,
+    ):
         self.module = module
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
@@ -81,18 +88,23 @@ class BoundStep:
         return dict(zip(self.parameter_names, self._values(all_parameters)))
 
     def forward(self, inputs, all_parameters):
-        return _tuple(functional_call(self.step.call, self._mapping(all_parameters), inputs))
+        return _tuple(
+            functional_call(self.step.call, self._mapping(all_parameters), inputs)
+        )
 
     def inverse(self, outputs, all_parameters):
-        return _tuple(functional_call(self.step.inverse_call,
-                                      self._mapping(all_parameters), outputs))
+        return _tuple(
+            functional_call(
+                self.step.inverse_call, self._mapping(all_parameters), outputs
+            )
+        )
 
     def vjp(self, inputs, output_gradients, all_parameters):
         values = self._values(all_parameters)
 
         def local(*arguments):
-            state = arguments[:self.step.num_inputs]
-            parameters = arguments[self.step.num_inputs:]
+            state = arguments[: self.step.num_inputs]
+            parameters = arguments[self.step.num_inputs :]
             mapping = dict(zip(self.parameter_names, parameters))
             return _tuple(functional_call(self.step.call, mapping, state))
 
@@ -104,8 +116,8 @@ class BoundStep:
         tangents = tuple(parameter_tangents[i] for i in self.parameter_indices)
 
         def local(*arguments):
-            state = arguments[:self.step.num_inputs]
-            parameters = arguments[self.step.num_inputs:]
+            state = arguments[: self.step.num_inputs]
+            parameters = arguments[self.step.num_inputs :]
             mapping = dict(zip(self.parameter_names, parameters))
             return _tuple(functional_call(self.step.call, mapping, state))
 
@@ -153,21 +165,26 @@ class Plan:
         bound_steps = []
         parameter_count = 0
         for step in self.steps:
-            names = tuple(f"module.{name}" for name, _ in step.module.named_parameters())
+            names = tuple(
+                f"module.{name}" for name, _ in step.module.named_parameters()
+            )
             indices = tuple(range(parameter_count, parameter_count + len(names)))
             parameter_count += len(names)
             bound_steps.append(BoundStep(step, indices, names))
-        self.execution = Execution(tuple(bound_steps), num_inputs, count,
-                                   parameter_count)
+        self.execution = Execution(
+            tuple(bound_steps), num_inputs, count, parameter_count
+        )
         self.compiled_function = _make_compiled_function(self.execution)
 
     def inverted(self):
-        return Plan(tuple(step.inverted() for step in reversed(self.steps)),
-                    self.num_outputs)
+        return Plan(
+            tuple(step.inverted() for step in reversed(self.steps)), self.num_outputs
+        )
 
     def bind(self):
-        parameters = tuple(parameter for step in self.steps
-                           for parameter in step.module.parameters())
+        parameters = tuple(
+            parameter for step in self.steps for parameter in step.module.parameters()
+        )
         return self.execution, parameters
 
 
@@ -176,8 +193,8 @@ class _Reconstruct(torch.autograd.Function):
 
     @staticmethod
     def forward(execution, *inputs_and_parameters):
-        state = tuple(inputs_and_parameters[:execution.num_inputs])
-        parameters = inputs_and_parameters[execution.num_inputs:]
+        state = tuple(inputs_and_parameters[: execution.num_inputs])
+        parameters = inputs_and_parameters[execution.num_inputs :]
         return execution.run(state, parameters)
 
     @staticmethod
@@ -185,7 +202,7 @@ class _Reconstruct(torch.autograd.Function):
         execution = inputs[0]
         tensors = inputs[1:]
         ctx.execution = execution
-        ctx.save_for_backward(*_tuple(output), *tensors[execution.num_inputs:])
+        ctx.save_for_backward(*_tuple(output), *tensors[execution.num_inputs :])
 
     @staticmethod
     def backward(ctx, *grad_outputs):
@@ -195,8 +212,8 @@ class _Reconstruct(torch.autograd.Function):
 def _reconstruct_backward(ctx, *grad_outputs):
     execution = ctx.execution
     saved = ctx.saved_tensors
-    state = tuple(saved[:execution.num_outputs])
-    parameters = tuple(saved[execution.num_outputs:])
+    state = tuple(saved[: execution.num_outputs])
+    parameters = tuple(saved[execution.num_outputs :])
     gradients = tuple(
         torch.zeros_like(value) if grad is None else grad
         for value, grad in zip(state, grad_outputs)
@@ -210,11 +227,13 @@ def _reconstruct_backward(ctx, *grad_outputs):
         input_count = bound.step.num_inputs
         gradients = gradients[:-count] + local_gradients[:input_count]
         state = state[:-count] + inputs
-        for index, contribution in zip(bound.parameter_indices,
-                                       local_gradients[input_count:]):
+        for index, contribution in zip(
+            bound.parameter_indices, local_gradients[input_count:]
+        ):
             previous = parameter_gradients[index]
-            parameter_gradients[index] = (contribution if previous is None
-                                          else previous + contribution)
+            parameter_gradients[index] = (
+                contribution if previous is None else previous + contribution
+            )
 
     return (*gradients, *parameter_gradients)
 
@@ -229,22 +248,21 @@ class _ReconstructWithJVP(_Reconstruct):
     def jvp(ctx, _execution_tangent, *tangents):
         execution = ctx.execution
         saved = ctx.saved_tensors
-        state = tuple(saved[:execution.num_inputs])
-        parameters = tuple(saved[execution.num_inputs:])
+        state = tuple(saved[: execution.num_inputs])
+        parameters = tuple(saved[execution.num_inputs :])
         input_tangents = tuple(
             torch.zeros_like(value) if tangent is None else tangent
-            for value, tangent in zip(state, tangents[:execution.num_inputs])
+            for value, tangent in zip(state, tangents[: execution.num_inputs])
         )
         parameter_tangents = tuple(
             torch.zeros_like(value) if tangent is None else tangent
-            for value, tangent in zip(parameters, tangents[execution.num_inputs:])
+            for value, tangent in zip(parameters, tangents[execution.num_inputs :])
         )
 
         for bound in execution.steps:
             count = bound.step.num_inputs
             outputs, output_tangents = bound.jvp(
-                state[-count:], input_tangents[-count:], parameters,
-                parameter_tangents
+                state[-count:], input_tangents[-count:], parameters, parameter_tangents
             )
             state = state[:-count] + _tuple(outputs)
             input_tangents = input_tangents[:-count] + _tuple(output_tangents)
@@ -258,8 +276,8 @@ def _make_compiled_function(execution):
     class CompiledReconstruct(torch.autograd.Function):
         @staticmethod
         def forward(ctx, *inputs_and_parameters):
-            state = tuple(inputs_and_parameters[:execution.num_inputs])
-            parameters = inputs_and_parameters[execution.num_inputs:]
+            state = tuple(inputs_and_parameters[: execution.num_inputs])
+            parameters = inputs_and_parameters[execution.num_inputs :]
             output = execution.run_compiled(state)
             ctx.execution = execution
             ctx.save_for_backward(*output, *parameters)
