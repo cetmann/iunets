@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from iunets import IUNet, iUNet
+from iunets.baseline_networks import StandardUNet
 from iunets.layers import (
     InvertibleDownsampling1D,
     InvertibleDownsampling2D,
@@ -175,3 +176,16 @@ def test_saved_activation_storage_is_depth_independent():
         return sum(saved)
 
     assert saved_activation_elements(5) == saved_activation_elements(1)
+
+
+@pytest.mark.parametrize("dim,shape", [(1, (1, 2, 8)),
+                                       (2, (1, 2, 8, 8)),
+                                       (3, (1, 2, 8, 8, 8))])
+def test_standard_unet_smoke(dim, shape):
+    model = StandardUNet(2, dim=dim, architecture=(1, 1),
+                         base_filters=2, skip_connection=True)
+    x = torch.randn(shape, requires_grad=True)
+    y = model(x)
+    assert y.shape == x.shape
+    y.square().sum().backward()
+    assert x.grad is not None

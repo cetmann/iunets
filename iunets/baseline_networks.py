@@ -6,8 +6,8 @@ from .layers import StandardBlock
 class StandardUNet(nn.Module):
     def __init__(self,
                 input_shape_or_channels,
-                dim=None,
-                architecture=[2,2,2,2],
+                dim=2,
+                architecture=(2, 2, 2, 2),
                 base_filters=32,
                 skip_connection=False,
                 block_type=StandardBlock,
@@ -15,6 +15,11 @@ class StandardUNet(nn.Module):
                 *args,
                 **kwargs):
         super(StandardUNet, self).__init__()
+        if dim not in (1, 2, 3):
+            raise ValueError("dim must be 1, 2, or 3.")
+        if not architecture or any(type(depth) is not int or depth <= 0
+                                   for depth in architecture):
+            raise ValueError("architecture must contain positive layer counts.")
         self.input_channels = get_num_channels(input_shape_or_channels)
         self.base_filters = base_filters
         self.architecture = architecture
@@ -63,7 +68,8 @@ class StandardUNet(nn.Module):
                 else:
                     out_channels = self.base_filters * (2**i)
                 self.module_L[i].append(
-                    self.block_type(self.dim, in_channels, out_channels, zero_init, *args, **kwargs)
+                    self.block_type(self.dim, in_channels, out_channels,
+                                    *args, zero_init=zero_init, **kwargs)
                 )
                 
         
@@ -78,7 +84,8 @@ class StandardUNet(nn.Module):
                     in_channels = self.base_filters * (2**(i+1))
                 out_channels = self.base_filters * (2**(i+1))
                 self.module_R[i].append(
-                    self.block_type(self.dim, in_channels, out_channels, zero_init, *args, **kwargs)
+                    self.block_type(self.dim, in_channels, out_channels,
+                                    *args, zero_init=zero_init, **kwargs)
                 )
             
 
