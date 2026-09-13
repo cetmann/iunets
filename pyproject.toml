@@ -26,6 +26,16 @@ docs = ["sphinx>=7", "furo>=2024.1"]
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.8"]
 
+# Contributor and CI installs use CPU wheels on x86-64 Linux. This source
+# setting is uv-only; published package metadata keeps torch>=2.3 portable.
+[tool.uv.sources]
+torch = [{index = "pytorch-cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'"}]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.setuptools.packages.find]
 include = ["iunets*"]
 
