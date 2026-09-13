@@ -13,6 +13,14 @@ import torch
 from torch import nn
 from torch.func import functional_call
 
+TORCH_23 = str(torch.__version__).startswith("2.3.")
+
+# PyTorch 2.3 lazily imports Dynamo from inside functorch's custom Function
+# dispatcher. Import it before entering a transform to avoid a circular
+# initialization failure in that release.
+if TORCH_23:
+    import torch._dynamo  # noqa: F401
+
 
 def _tuple(value):
     return value if isinstance(value, tuple) else (value,)
@@ -118,6 +126,16 @@ class Execution:
             state = state[:-count] + result
         return state
 
+    def run_compiled(self, state):
+        # Dynamo 2.3 cannot trace functional_call on an nn.Module inside a
+        # custom Function. The module parameters are the same tensors passed
+        # explicitly to apply(), so backward still returns their local VJPs.
+        for bound in self.steps:
+            count = bound.step.num_inputs
+            result = _tuple(bound.step.call(*state[-count:]))
+            state = state[:-count] + result
+        return state
+
 
 class Plan:
     def __init__(self, steps: Sequence[Step], num_inputs: int):
@@ -130,29 +148,27 @@ class Plan:
             count += step.num_outputs - step.num_inputs
         self.num_outputs = count
 
+        # Keep the call structure stable for torch.compile. Parameter values
+        # are still read from modules on each invocation for functional_call.
+        bound_steps = []
+        parameter_count = 0
+        for step in self.steps:
+            names = tuple(f"module.{name}" for name, _ in step.module.named_parameters())
+            indices = tuple(range(parameter_count, parameter_count + len(names)))
+            parameter_count += len(names)
+            bound_steps.append(BoundStep(step, indices, names))
+        self.execution = Execution(tuple(bound_steps), num_inputs, count,
+                                   parameter_count)
+        self.compiled_function = _make_compiled_function(self.execution)
+
     def inverted(self):
         return Plan(tuple(step.inverted() for step in reversed(self.steps)),
                     self.num_outputs)
 
     def bind(self):
-        parameters = []
-        indices = {}
-        bound_steps = []
-        for step in self.steps:
-            local_indices = []
-            local_names = []
-            for name, parameter in step.module.named_parameters():
-                if not parameter.requires_grad:
-                    continue
-                key = id(parameter)
-                if key not in indices:
-                    indices[key] = len(parameters)
-                    parameters.append(parameter)
-                local_indices.append(indices[key])
-                local_names.append(f"module.{name}")
-            bound_steps.append(BoundStep(step, tuple(local_indices), tuple(local_names)))
-        return Execution(tuple(bound_steps), self.num_inputs, self.num_outputs,
-                         len(parameters)), tuple(parameters)
+        parameters = tuple(parameter for step in self.steps
+                           for parameter in step.module.parameters())
+        return self.execution, parameters
 
 
 class _Reconstruct(torch.autograd.Function):
@@ -173,30 +189,34 @@ class _Reconstruct(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, *grad_outputs):
-        execution = ctx.execution
-        saved = ctx.saved_tensors
-        state = tuple(saved[:execution.num_outputs])
-        parameters = tuple(saved[execution.num_outputs:])
-        gradients = tuple(
-            torch.zeros_like(value) if grad is None else grad
-            for value, grad in zip(state, grad_outputs)
-        )
-        parameter_gradients = [None] * execution.num_parameters
+        return (None, *_reconstruct_backward(ctx, *grad_outputs))
 
-        for bound in reversed(execution.steps):
-            count = bound.step.num_outputs
-            inputs = bound.inverse(state[-count:], parameters)
-            local_gradients = bound.vjp(inputs, gradients[-count:], parameters)
-            input_count = bound.step.num_inputs
-            gradients = gradients[:-count] + local_gradients[:input_count]
-            state = state[:-count] + inputs
-            for index, contribution in zip(bound.parameter_indices,
-                                           local_gradients[input_count:]):
-                previous = parameter_gradients[index]
-                parameter_gradients[index] = (contribution if previous is None
-                                              else previous + contribution)
 
-        return (None, *gradients, *parameter_gradients)
+def _reconstruct_backward(ctx, *grad_outputs):
+    execution = ctx.execution
+    saved = ctx.saved_tensors
+    state = tuple(saved[:execution.num_outputs])
+    parameters = tuple(saved[execution.num_outputs:])
+    gradients = tuple(
+        torch.zeros_like(value) if grad is None else grad
+        for value, grad in zip(state, grad_outputs)
+    )
+    parameter_gradients = [None] * execution.num_parameters
+
+    for bound in reversed(execution.steps):
+        count = bound.step.num_outputs
+        inputs = bound.inverse(state[-count:], parameters)
+        local_gradients = bound.vjp(inputs, gradients[-count:], parameters)
+        input_count = bound.step.num_inputs
+        gradients = gradients[:-count] + local_gradients[:input_count]
+        state = state[:-count] + inputs
+        for index, contribution in zip(bound.parameter_indices,
+                                       local_gradients[input_count:]):
+            previous = parameter_gradients[index]
+            parameter_gradients[index] = (contribution if previous is None
+                                          else previous + contribution)
+
+    return (*gradients, *parameter_gradients)
 
 
 class _ReconstructWithJVP(_Reconstruct):
@@ -232,10 +252,37 @@ class _ReconstructWithJVP(_Reconstruct):
         return input_tangents
 
 
+def _make_compiled_function(execution):
+    """Capture the static plan before tracing; PyTorch 2.3 accepts tensors only."""
+
+    class CompiledReconstruct(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, *inputs_and_parameters):
+            state = tuple(inputs_and_parameters[:execution.num_inputs])
+            parameters = inputs_and_parameters[execution.num_inputs:]
+            output = execution.run_compiled(state)
+            ctx.execution = execution
+            ctx.save_for_backward(*output, *parameters)
+            return output
+
+        @staticmethod
+        def backward(ctx, *grad_outputs):
+            return _reconstruct_backward(ctx, *grad_outputs)
+
+    return CompiledReconstruct
+
+
 def apply_reconstruction(plan: Plan, *inputs):
+    if torch.compiler.is_compiling() and TORCH_23:
+        # The 2.3 compiler cannot trace module calls inside a custom
+        # autograd Function. Keep fullgraph training available on that floor.
+        result = plan.execution.run_compiled(tuple(inputs))
+        return result[0] if plan.num_outputs == 1 else result
     execution, parameters = plan.bind()
-    function = _Reconstruct if torch.compiler.is_compiling() else _ReconstructWithJVP
-    result = function.apply(execution, *inputs, *parameters)
+    if torch.compiler.is_compiling():
+        result = plan.compiled_function.apply(*inputs, *parameters)
+    else:
+        result = _ReconstructWithJVP.apply(execution, *inputs, *parameters)
     return result[0] if plan.num_outputs == 1 else result
 
 
