@@ -41,11 +41,7 @@ class IUNet(nn.Module):
         a tuple of 4 numbers, e.g. ``(32,64,128,256,384)``.
     :param architecture:
         Determines the number of invertible layers at each
-        resolution (both left and right), e.g. ``[2,3,4]`` results in the
-        following structure::
-            2-----2
-             3---3
-              4-4
+        resolution (both encoder and decoder), e.g. ``(2, 3, 4)``.
         Must be the same length as ``channels``.
     :param dim: Either ``1``, ``2`` or ``3``, signifying whether a 1D, 2D or 3D
         invertible U-Net should be created.

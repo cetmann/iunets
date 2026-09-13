@@ -1,42 +1,15 @@
-.. iUNets documentation master file, created by
-   sphinx-quickstart on Fri Sep 11 14:11:14 2020.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+iUNets documentation
+=====================
 
-Welcome to iUNets's documentation!
-==================================
+iUNets provides invertible 1D, 2D, and 3D U-Nets with native gradient
+reconstruction for memory efficient training.
 
 .. toctree::
-   :glob:
-   :maxdepth: 1
-   :caption: Introduction
+   :maxdepth: 2
 
    readme
-
-
-.. toctree::
-   :glob:
-   :maxdepth: 1
-   :caption: Tutorials
-
-   training_iunets
-   invertible_layers
-   invertible_downsampling
-   invertible_channel_mixing
-   padding
-
-.. toctree::
-   :caption: API documentation
-   :glob:
-
-   iunets
-   iunets.layers
-
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+   quickstart
+   gradient_modes
+   migration
+   api
+   releasing

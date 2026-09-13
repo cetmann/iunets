@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.10"
+            torch: floor
+          - python: "3.11"
+            torch: current
+          - python: "3.12"
+            torch: current
+          - python: "3.13"
+            torch: current
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - name: Install Python and dependencies
+        run: |
+          uv python install ${{ matrix.python }}
+          uv sync --frozen --python ${{ matrix.python }}
+      - name: Exercise PyTorch 2.3 floor
+        if: matrix.torch == 'floor'
+        run: |
+          uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu 'torch==2.3.*'
+          uv pip install --python .venv/bin/python 'numpy<2' 'sympy==1.12'
+      - name: Run tests
+        run: uv run --no-sync pytest -q
+
+  package-and-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen --python 3.12 --extra docs
+      - run: uv run --no-sync sphinx-build -W -b html docs docs/_build/html
+      - run: uv build
+      - name: Install wheel and source distribution
+        shell: bash
+        run: |
+          uv pip install --python .venv/bin/python --no-deps dist/*.whl
+          uv run --no-sync python -c 'from iunets import IUNet; print(IUNet.__name__)'
+          uv pip install --python .venv/bin/python --no-deps dist/*.tar.gz
+          uv run --no-sync python -c 'from iunets import IUNet; print(IUNet.__name__)'
