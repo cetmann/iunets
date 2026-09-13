@@ -1,3 +1,5 @@
+"""A conventional U-Net baseline for comparison with :class:`iunets.IUNet`."""
+
 import torch
 from torch import nn
 
@@ -6,6 +8,23 @@ from .utils import get_num_channels
 
 
 class StandardUNet(nn.Module):
+    """Conventional U-Net baseline used for comparisons with :class:`IUNet`.
+
+    This model uses max pooling and transposed convolutions, so its
+    intermediate activations are recorded by ordinary autograd. It accepts
+    1D, 2D, or 3D tensors in ``(batch, channels, *spatial)`` format.
+
+    Args:
+        input_shape_or_channels: Input shape or the number of input channels.
+        dim: Number of spatial dimensions (1, 2, or 3).
+        architecture: Number of blocks at each encoder level.
+        base_filters: Number of filters at the first encoder level.
+        skip_connection: Add the input to the final output after a projection.
+        block_type: Block class receiving ``(dim, in_channels, out_channels)``.
+        zero_init: Forwarded to ``block_type`` when supported.
+        *args, **kwargs: Additional arguments forwarded to each block.
+    """
+
     def __init__(
         self,
         input_shape_or_channels,
@@ -113,6 +132,7 @@ class StandardUNet(nn.Module):
             )
 
     def forward(self, input, *args, **kwargs):
+        """Apply the baseline U-Net to an input tensor."""
 
         skip_inputs = []
 

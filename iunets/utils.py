@@ -1,26 +1,27 @@
+"""Small helpers shared by the public models and invertible layers."""
+
+from numbers import Integral
+
 import torch
 
 
 def get_num_channels(input_shape_or_channels):
-    """
-    Small helper function which outputs the number of
-    channels regardless of whether the input shape or
-    the number of channels were passed.
-    """
-    if hasattr(input_shape_or_channels, "__iter__"):
-        return input_shape_or_channels[0]
-    else:
+    """Return a channel count from either an integer or a shape-like value."""
+    if isinstance(input_shape_or_channels, Integral):
         return input_shape_or_channels
+    return input_shape_or_channels[0]
 
 
 def print_iunet_layout(iunet):
+    """Build the compact text diagram used by :meth:`IUNet.layout`."""
+
     left = []
     right = []
     splits = []
 
-    middle_padding = [""] * (iunet.num_levels)
+    middle_padding = [""] * iunet.num_levels
 
-    output = [""] * (iunet.num_levels)
+    output = [""] * iunet.num_levels
 
     for i in range(iunet.num_levels):
         left.append("-".join([str(iunet.channels[i])] * iunet.architecture[i]))
@@ -36,7 +37,7 @@ def print_iunet_layout(iunet):
     for i in range(iunet.num_levels - 1, -1, -1):
         if i < iunet.num_levels - 1:
             middle_padding[i] = "".join(
-                ["-"] * max([len(output[i + 1]) - len(splits[i]), 4])
+                ["-"] * max(len(output[i + 1]) - len(splits[i]), 4)
             )
         output[i] = left[i] + middle_padding[i] + right[i]
 
@@ -52,7 +53,7 @@ def print_iunet_layout(iunet):
 
 
 def eye_like(M, device=None, dtype=None):
-    """Creates an identity matrix of the same shape as another matrix.
+    """Create an identity matrix or batch of matrices matching ``M``.
 
     For matrix M, the output is same shape as M, if M is a (n,n)-matrix.
     If M is a batch of m matrices (i.e. a (m,n,n)-tensor), create a batch of
@@ -71,16 +72,15 @@ def eye_like(M, device=None, dtype=None):
     Returns:
         torch.Tensor : Identity matrix or batch of identity matrices.
     """
-    assert len(M.shape) in [2, 3]
-    assert M.shape[-1] == M.shape[-2]
+    if M.ndim not in (2, 3) or M.shape[-1] != M.shape[-2]:
+        raise ValueError("M must have shape (n, n) or (batch, n, n).")
     n = M.shape[-1]
     if device is None:
         device = M.device
     if dtype is None:
         dtype = M.dtype
     eye = torch.eye(M.shape[-1], device=device, dtype=dtype)
-    if len(M.shape) == 2:
+    if M.ndim == 2:
         return eye
-    else:
-        m = M.shape[0]
-        return eye.view(-1, n, n).expand(m, -1, -1)
+    m = M.shape[0]
+    return eye.view(-1, n, n).expand(m, -1, -1)

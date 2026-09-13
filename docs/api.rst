@@ -6,6 +6,9 @@ Python API
 
 .. autofunction:: iunets.layers.create_standard_module
 
+.. autoclass:: iunets.baseline_networks.StandardUNet
+   :members: forward
+
 .. autoclass:: iunets.layers.AdditiveCoupling
 
 .. autoclass:: iunets.layers.InvertibleDownsampling1D

@@ -1,3 +1,5 @@
+"""Invertible resampling, channel mixing, and coupling layers."""
+
 import math
 from warnings import warn
 
@@ -130,6 +132,13 @@ class OrthogonalResamplingLayer(nn.Module):
 
 
 class InvertibleDownsampling1D(OrthogonalResamplingLayer):
+    """Invertibly downsample a one-dimensional signal.
+
+    The stride reduces the spatial length while increasing channels by the
+    same factor, so the number of elements is preserved. ``inverse`` applies
+    the matching transposed convolution.
+    """
+
     def __init__(
         self,
         in_channels: int,
@@ -155,19 +164,25 @@ class InvertibleDownsampling1D(OrthogonalResamplingLayer):
         )
 
     def forward(self, x):
-        # Convolve with stride 2 in order to invertibly downsample.
+        """Downsample ``x`` while preserving its total number of elements."""
+
+        # The orthogonal kernel trades spatial samples for channels.
         return F.conv1d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
     def inverse(self, x):
-        # Apply transposed convolution in order to invert the downsampling.
+        """Undo the downsampling and recover the input spatial shape."""
+
+        # The transposed convolution reverses the channel-to-sample packing.
         return F.conv_transpose1d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
 
 class InvertibleUpsampling1D(OrthogonalResamplingLayer):
+    """Invertibly upsample a one-dimensional signal."""
+
     def __init__(
         self,
         in_channels: int,
@@ -195,19 +210,25 @@ class InvertibleUpsampling1D(OrthogonalResamplingLayer):
         )
 
     def forward(self, x):
-        # Apply transposed convolution in order to invertibly upsample.
+        """Upsample ``x`` while preserving its total number of elements."""
+
+        # The transposed convolution reverses the channel-to-sample packing.
         return F.conv_transpose1d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
     def inverse(self, x):
-        # Convolve with stride 2 in order to invert the upsampling.
+        """Undo the upsampling and recover the input channel layout."""
+
+        # The orthogonal kernel trades spatial samples for channels.
         return F.conv1d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
 
 class InvertibleDownsampling2D(OrthogonalResamplingLayer):
+    """Invertibly downsample a two-dimensional image or feature map."""
+
     def __init__(
         self,
         in_channels: int,
@@ -233,19 +254,25 @@ class InvertibleDownsampling2D(OrthogonalResamplingLayer):
         )
 
     def forward(self, x):
-        # Convolve with stride 2 in order to invertibly downsample.
+        """Downsample ``x`` while preserving its total number of elements."""
+
+        # The orthogonal kernel trades spatial samples for channels.
         return F.conv2d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
     def inverse(self, x):
-        # Apply transposed convolution in order to invert the downsampling.
+        """Undo the downsampling and recover the input spatial shape."""
+
+        # The transposed convolution reverses the channel-to-sample packing.
         return F.conv_transpose2d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
 
 class InvertibleUpsampling2D(OrthogonalResamplingLayer):
+    """Invertibly upsample a two-dimensional image or feature map."""
+
     def __init__(
         self,
         in_channels: int,
@@ -273,19 +300,25 @@ class InvertibleUpsampling2D(OrthogonalResamplingLayer):
         )
 
     def forward(self, x):
-        # Apply transposed convolution in order to invertibly upsample.
+        """Upsample ``x`` while preserving its total number of elements."""
+
+        # The transposed convolution reverses the channel-to-sample packing.
         return F.conv_transpose2d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
     def inverse(self, x):
-        # Convolve with stride 2 in order to invert the upsampling.
+        """Undo the upsampling and recover the input channel layout."""
+
+        # The orthogonal kernel trades spatial samples for channels.
         return F.conv2d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
 
 class InvertibleDownsampling3D(OrthogonalResamplingLayer):
+    """Invertibly downsample a three-dimensional volume or feature map."""
+
     def __init__(
         self,
         in_channels: int,
@@ -311,19 +344,25 @@ class InvertibleDownsampling3D(OrthogonalResamplingLayer):
         )
 
     def forward(self, x):
-        # Convolve with stride 2 in order to invertibly downsample.
+        """Downsample ``x`` while preserving its total number of elements."""
+
+        # The orthogonal kernel trades spatial samples for channels.
         return F.conv3d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
     def inverse(self, x):
-        # Apply transposed convolution in order to invert the downsampling.
+        """Undo the downsampling and recover the input spatial shape."""
+
+        # The transposed convolution reverses the channel-to-sample packing.
         return F.conv_transpose3d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
 
 class InvertibleUpsampling3D(OrthogonalResamplingLayer):
+    """Invertibly upsample a three-dimensional volume or feature map."""
+
     def __init__(
         self,
         in_channels: int,
@@ -351,42 +390,62 @@ class InvertibleUpsampling3D(OrthogonalResamplingLayer):
         )
 
     def forward(self, x):
-        # Apply transposed convolution in order to invertibly upsample.
+        """Upsample ``x`` while preserving its total number of elements."""
+
+        # The transposed convolution reverses the channel-to-sample packing.
         return F.conv_transpose3d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
     def inverse(self, x):
-        # Convolve with stride 2 in order to invert the upsampling.
+        """Undo the upsampling and recover the input channel layout."""
+
+        # The orthogonal kernel trades spatial samples for channels.
         return F.conv3d(
             x, self.kernel, stride=self.stride, groups=self.low_channel_number
         )
 
 
 class SplitChannels(torch.nn.Module):
+    """Split a tensor into two cloned channel groups.
+
+    Cloning keeps the two outputs independent from the input storage, which is
+    useful when reversible states are reconstructed during backward.
+    """
+
     def __init__(self, split_location):
         super().__init__()
         self.split_location = split_location
 
     def forward(self, x):
+        """Return the cloned left and right channel groups."""
+
         a, b = (x[:, : self.split_location], x[:, self.split_location :])
         a, b = a.clone(), b.clone()
         del x
         return a, b
 
     def inverse(self, x, y):
+        """Recombine the two channel groups into one tensor."""
+
         return torch.cat([x, y], dim=1)
 
 
 class ConcatenateChannels(torch.nn.Module):
+    """Concatenate two channel groups and provide the matching inverse split."""
+
     def __init__(self, split_location):
         super().__init__()
         self.split_location = split_location
 
     def forward(self, x, y):
+        """Concatenate the two channel groups along the channel dimension."""
+
         return torch.cat([x, y], dim=1)
 
     def inverse(self, x):
+        """Return the cloned channel groups from a concatenated tensor."""
+
         a, b = (x[:, : self.split_location], x[:, self.split_location :])
         a, b = a.clone(), b.clone()
         del x
@@ -433,6 +492,9 @@ class AdditiveCoupling(nn.Module):
         The index of the channel at which the input and output activations are
         split.
 
+    ``F`` is evaluated again by ``inverse``. For use with iUNet's reconstruction
+    gradient mode, it therefore needs to be deterministic and side effect free.
+
     """
 
     def __init__(self, F: nn.Module, channel_split_pos: int):
@@ -442,25 +504,36 @@ class AdditiveCoupling(nn.Module):
         self.channel_split_pos = channel_split_pos
 
     def forward(self, x):
+        """Apply the additive coupling map to ``x``."""
+
         x1, x2 = x[:, : self.channel_split_pos], x[:, self.channel_split_pos :]
         x1, x2 = x1.contiguous(), x2.contiguous()
         y1 = x2
-        y2 = x1 + self.F.forward(x2)
+        y2 = x1 + self.F(x2)
         out = torch.cat([y1, y2], dim=1)
         return out
 
     def inverse(self, y):
-        # y1, y2 = torch.chunk(y, 2, dim=1)
+        """Recover the coupling input from its output ``y``."""
+
         inverse_channel_split_pos = y.shape[1] - self.channel_split_pos
         y1, y2 = (y[:, :inverse_channel_split_pos], y[:, inverse_channel_split_pos:])
         y1, y2 = y1.contiguous(), y2.contiguous()
         x2 = y1
-        x1 = y2 - self.F.forward(y1)
+        x1 = y2 - self.F(y1)
         x = torch.cat([x1, x2], dim=1)
         return x
 
 
 class StandardBlock(nn.Module):
+    """Convolutional coupling function used by :func:`create_standard_module`.
+
+    Each block keeps the spatial shape, supports 1D, 2D, and 3D convolutions,
+    and can use instance, group, or batch normalization. Set ``zero_init`` to
+    initialize the final convolution at zero, making the surrounding coupling
+    transform an identity (apart from its channel permutation).
+    """
+
     def __init__(
         self,
         dim,
@@ -542,10 +615,20 @@ class StandardBlock(nn.Module):
         self.seq = nn.Sequential(*self.seq)
 
     def forward(self, x):
+        """Apply the convolutional sequence while preserving spatial size."""
+
         return self.seq(x)
 
 
 def create_standard_module(in_channels, **kwargs):
+    """Build the default additive coupling module for an iUNet level.
+
+    ``in_channels`` may be an integer or a shape-like object. The remaining
+    keyword arguments are forwarded to :class:`StandardBlock`; iUNet also
+    supplies ``dim`` and ``module_index`` so odd channel counts can alternate
+    the two coupling partitions.
+    """
+
     dim = kwargs.pop("dim", 2)
     depth = kwargs.pop("depth", 2)
     num_channels = get_num_channels(in_channels)
@@ -572,34 +655,28 @@ def __initialize_weight__(
     kernel_matrix_shape: tuple[int, ...],
     stride: tuple[int, ...],
     method: str = "cayley",
-    init: str = "haar",
+    init="haar",
     dtype: torch.dtype = torch.float32,
     *args,
     **kwargs,
 ):
-    """Function which computes specific orthogonal matrices.
+    """Create the parameter tensor for an orthogonal kernel initialization.
 
-    For some chosen method of parametrizing orthogonal matrices, this
-    function outputs the required weights necessary to represent a
-    chosen initialization as a Pytorch tensor of matrices.
+    The returned tensor is consumed by the selected parameterization and has
+    shape ``kernel_matrix_shape``. Explicit array-like initializers are copied
+    across matrices when only one matrix is supplied.
 
     Args:
-        kernel_matrix_shape : The output shape of the
-            orthogonal matrices. Should be (num_matrices, height, width).
-        stride : The stride for the invertible up- or
-            downsampling for which this matrix is to be used. The length
-            of ``stride`` should match the dimensionality of the data.
-        method : The method for parametrising orthogonal matrices.
-            Should be 'exp' or 'cayley'
-        init : The matrix which should be represented. Should be
-            'squeeze', 'pixel_shuffle', 'haar' or 'random'. 'haar' is only
-            possible if ``stride`` is only 2.
-        dtype : PyTorch dtype which should be used for the matrix.
-        *args: Variable length argument iterable.
-        **kwargs: Arbitrary keyword arguments.
+        kernel_matrix_shape: Output shape ``(num_matrices, n, n)``.
+        stride: Spatial stride; its length determines the data dimensionality.
+        method: ``"exp"``, ``"cayley"``, or ``"householder"``.
+        init: A named initialization (``"haar"``, ``"squeeze"``, or
+            ``"random"``) or an array-like matrix.
+        dtype: PyTorch dtype used for the returned tensor.
+        *args, **kwargs: Reserved compatibility arguments.
 
     Returns:
-        Tensor : Orthogonal matrices of shape ``kernel_matrix_shape``.
+        A tensor with shape ``kernel_matrix_shape``.
     """
 
     # Determine dimensionality of the data and the number of matrices.
@@ -717,12 +794,16 @@ def __initialize_weight__(
             raise ValueError(f"init must have shape {kernel_matrix_shape}.")
         return init
 
-    else:
-        raise TypeError(f"Unknown initialization: {init!r}.")
+    raise TypeError(f"Unknown initialization: {init!r}.")
 
 
 class OrthogonalChannelMixing(nn.Module):
-    """Base class for all orthogonal channel mixing layers."""
+    """Base class for orthogonal 1x1 channel mixing layers.
+
+    The learnable weight is mapped to an orthogonal matrix with the selected
+    exponential, Cayley, or Householder parameterization. Subclasses reshape
+    that matrix into a dimension-specific convolution kernel.
+    """
 
     def __init__(
         self, in_channels: int, method: str = "cayley", learnable: bool = True, **kwargs
@@ -790,16 +871,24 @@ class InvertibleChannelMixing1D(OrthogonalChannelMixing):
 
     @property
     def kernel(self):
+        """Return the orthogonal matrix reshaped as a 1D 1x1 kernel."""
+
         return self.kernel_matrix.view(self.in_channels, self.in_channels, 1)
 
     def forward(self, x):
+        """Mix channels with a pointwise 1D convolution."""
+
         return nn.functional.conv1d(x, self.kernel)
 
     def inverse(self, x):
+        """Apply the transposed pointwise convolution to undo mixing."""
+
         return nn.functional.conv_transpose1d(x, self.kernel)
 
 
 class InvertibleChannelMixing2D(OrthogonalChannelMixing):
+    """Orthogonal 1x1 channel mixing for two-dimensional feature maps."""
+
     def __init__(
         self, in_channels: int, method: str = "cayley", learnable: bool = True, **kwargs
     ):
@@ -810,16 +899,24 @@ class InvertibleChannelMixing2D(OrthogonalChannelMixing):
 
     @property
     def kernel(self):
+        """Return the orthogonal matrix reshaped as a 2D 1x1 kernel."""
+
         return self.kernel_matrix.view(self.in_channels, self.in_channels, 1, 1)
 
     def forward(self, x):
+        """Mix channels with a pointwise 2D convolution."""
+
         return nn.functional.conv2d(x, self.kernel)
 
     def inverse(self, x):
+        """Apply the transposed pointwise convolution to undo mixing."""
+
         return nn.functional.conv_transpose2d(x, self.kernel)
 
 
 class InvertibleChannelMixing3D(OrthogonalChannelMixing):
+    """Orthogonal 1x1 channel mixing for three-dimensional feature maps."""
+
     def __init__(
         self, in_channels: int, method: str = "cayley", learnable: bool = True, **kwargs
     ):
@@ -830,10 +927,16 @@ class InvertibleChannelMixing3D(OrthogonalChannelMixing):
 
     @property
     def kernel(self):
+        """Return the orthogonal matrix reshaped as a 3D 1x1 kernel."""
+
         return self.kernel_matrix.view(self.in_channels, self.in_channels, 1, 1, 1)
 
     def forward(self, x):
+        """Mix channels with a pointwise 3D convolution."""
+
         return nn.functional.conv3d(x, self.kernel)
 
     def inverse(self, x):
+        """Apply the transposed pointwise convolution to undo mixing."""
+
         return nn.functional.conv_transpose3d(x, self.kernel)

@@ -23,11 +23,19 @@ if TORCH_23:
 
 
 def _tuple(value):
+    """Normalize a module result to a tuple for the execution planner."""
+
     return value if isinstance(value, tuple) else (value,)
 
 
 class ReversibleModule(nn.Module):
-    """Keep the old ``_fn`` checkpoint namespace without external dependencies."""
+    """Wrap an invertible module while preserving its checkpoint namespace.
+
+    The wrapped module must implement ``inverse`` with the same input and
+    output arity as ``forward`` in reverse order. Reconstruction mode calls
+    both methods again during backward, so they should be deterministic and
+    free of side effects.
+    """
 
     def __init__(self, fn: nn.Module):
         super().__init__()
@@ -38,9 +46,13 @@ class ReversibleModule(nn.Module):
         self._fn = fn
 
     def forward(self, *inputs):
+        """Delegate the forward call to the wrapped module."""
+
         return self._fn(*inputs)
 
     def inverse(self, *outputs):
+        """Delegate the inverse call to the wrapped module."""
+
         return self._fn.inverse(*outputs)
 
 
@@ -57,6 +69,8 @@ class _Call(nn.Module):
 
 
 class Step:
+    """Describe one forward or inverse operation in a reversible plan."""
+
     def __init__(
         self,
         module: ReversibleModule,
@@ -72,11 +86,15 @@ class Step:
         self.inverse_call = _Call(module, not reverse)
 
     def inverted(self):
+        """Return a step that applies this operation in the opposite direction."""
+
         return Step(self.module, self.num_outputs, self.num_inputs, not self.reverse)
 
 
 @dataclass(frozen=True)
 class BoundStep:
+    """A step with stable parameter indices for functional differentiation."""
+
     step: Step
     parameter_indices: tuple[int, ...]
     parameter_names: tuple[str, ...]
@@ -88,11 +106,15 @@ class BoundStep:
         return dict(zip(self.parameter_names, self._values(all_parameters)))
 
     def forward(self, inputs, all_parameters):
+        """Run this step with parameters supplied as a flat tuple."""
+
         return _tuple(
             functional_call(self.step.call, self._mapping(all_parameters), inputs)
         )
 
     def inverse(self, outputs, all_parameters):
+        """Recover step inputs from outputs using the inverse module."""
+
         return _tuple(
             functional_call(
                 self.step.inverse_call, self._mapping(all_parameters), outputs
@@ -100,6 +122,8 @@ class BoundStep:
         )
 
     def vjp(self, inputs, output_gradients, all_parameters):
+        """Compute local input and parameter gradients with ``torch.func.vjp``."""
+
         values = self._values(all_parameters)
 
         def local(*arguments):
@@ -112,6 +136,8 @@ class BoundStep:
         return pullback(output_gradients)
 
     def jvp(self, inputs, input_tangents, all_parameters, parameter_tangents):
+        """Propagate input and parameter tangents through this step."""
+
         values = self._values(all_parameters)
         tangents = tuple(parameter_tangents[i] for i in self.parameter_indices)
 
@@ -126,12 +152,16 @@ class BoundStep:
 
 @dataclass(frozen=True)
 class Execution:
+    """Executable description of a sequence with explicit parameter inputs."""
+
     steps: tuple[BoundStep, ...]
     num_inputs: int
     num_outputs: int
     num_parameters: int
 
     def run(self, state, parameters):
+        """Run the sequence using ``functional_call`` and explicit parameters."""
+
         for bound in self.steps:
             count = bound.step.num_inputs
             result = bound.forward(state[-count:], parameters)
@@ -139,9 +169,12 @@ class Execution:
         return state
 
     def run_compiled(self, state):
-        # Dynamo 2.3 cannot trace functional_call on an nn.Module inside a
-        # custom Function. The module parameters are the same tensors passed
-        # explicitly to apply(), so backward still returns their local VJPs.
+        """Run the sequence through direct module calls for compiler tracing.
+
+        PyTorch 2.3 cannot trace ``functional_call`` inside a custom autograd
+        function. The direct-call path is used only while compiling; eager
+        reconstruction continues to use explicit functional parameters.
+        """
         for bound in self.steps:
             count = bound.step.num_inputs
             result = _tuple(bound.step.call(*state[-count:]))
@@ -150,6 +183,8 @@ class Execution:
 
 
 class Plan:
+    """Validate and bind a reversible sequence for repeated model calls."""
+
     def __init__(self, steps: Sequence[Step], num_inputs: int):
         self.steps = tuple(steps)
         self.num_inputs = num_inputs
@@ -177,11 +212,15 @@ class Plan:
         self.compiled_function = _make_compiled_function(self.execution)
 
     def inverted(self):
+        """Return a plan that executes the sequence in reverse."""
+
         return Plan(
             tuple(step.inverted() for step in reversed(self.steps)), self.num_outputs
         )
 
     def bind(self):
+        """Return the execution object and current module parameters."""
+
         parameters = tuple(
             parameter for step in self.steps for parameter in step.module.parameters()
         )
@@ -189,6 +228,8 @@ class Plan:
 
 
 class _Reconstruct(torch.autograd.Function):
+    """Autograd bridge that retains only sequence boundaries for backward."""
+
     generate_vmap_rule = True
 
     @staticmethod
@@ -202,6 +243,8 @@ class _Reconstruct(torch.autograd.Function):
         execution = inputs[0]
         tensors = inputs[1:]
         ctx.execution = execution
+        # Outputs are the final state; parameters are needed to replay each
+        # inverse and local VJP. Intermediate states are deliberately omitted.
         ctx.save_for_backward(*_tuple(output), *tensors[execution.num_inputs :])
 
     @staticmethod
@@ -210,6 +253,13 @@ class _Reconstruct(torch.autograd.Function):
 
 
 def _reconstruct_backward(ctx, *grad_outputs):
+    """Rebuild states from the output boundary and accumulate local VJPs.
+
+    Only the final state of the sequence and its parameters are saved by the
+    custom autograd function. Each step is inverted, differentiated locally,
+    and then discarded before moving to the preceding step.
+    """
+
     execution = ctx.execution
     saved = ctx.saved_tensors
     state = tuple(saved[: execution.num_outputs])
@@ -239,6 +289,8 @@ def _reconstruct_backward(ctx, *grad_outputs):
 
 
 class _ReconstructWithJVP(_Reconstruct):
+    """Reconstruction variant that also supports forward-mode AD transforms."""
+
     @staticmethod
     def setup_context(ctx, inputs, output):
         _Reconstruct.setup_context(ctx, inputs, output)
@@ -291,6 +343,8 @@ def _make_compiled_function(execution):
 
 
 def apply_reconstruction(plan: Plan, *inputs):
+    """Apply ``plan`` with bounded activation storage and inverse-based backward."""
+
     if torch.compiler.is_compiling() and TORCH_23:
         # The 2.3 compiler cannot trace module calls inside a custom
         # autograd Function. Keep fullgraph training available on that floor.
@@ -305,6 +359,8 @@ def apply_reconstruction(plan: Plan, *inputs):
 
 
 def apply_autograd(plan: Plan, *inputs):
+    """Apply ``plan`` with ordinary PyTorch autograd recording."""
+
     execution, parameters = plan.bind()
     result = execution.run(tuple(inputs), parameters)
     return result[0] if plan.num_outputs == 1 else result

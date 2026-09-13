@@ -1,3 +1,5 @@
+"""Public fully invertible U-Net model and its encoder/decoder plans."""
+
 from __future__ import annotations
 
 import math
@@ -43,8 +45,8 @@ class IUNet(nn.Module):
 
     :param channels:
         The number of channels at each resolution. For example: If one wants
-        5 resolution levels (i.e. 3 up-/downsampling operations), it should be
-        a tuple of 4 numbers, e.g. ``(32,64,128,256,384)``.
+        5 resolution levels (i.e. 4 up-/downsampling operations), it should be
+        a tuple of 5 numbers, e.g. ``(32, 64, 128, 256, 384)``.
     :param architecture:
         Determines the number of invertible layers at each
         resolution (both encoder and decoder), e.g. ``(2, 3, 4)``.
@@ -86,15 +88,15 @@ class IUNet(nn.Module):
         strides at different up-/downsampling stages.
     :param resampling_method:
         Chooses the method for parametrizing orthogonal matrices for
-        invertible up- and downsampling. Can be either ``"exp"`` (i.e.
-        exponentiation of skew-symmetric matrices) or ``"cayley"`` (i.e.
-        the Cayley transform, acting on skew-symmetric matrices).
+        invertible up- and downsampling. Can be ``"exp"`` (exponentiation of a
+        skew-symmetric matrix), ``"cayley"`` (the Cayley transform), or
+        ``"householder"`` (a product of reflections).
         Defaults to ``"cayley"``.
     :param resampling_init:
         Sets the initialization for the learnable up- and downsampling
         operators. Can be ``"haar"``, ``"pixel_shuffle"`` (aliases:
-        ``"squeeze"``, ``"zeros"``), a specific ``torch.Tensor`` or a
-        ``numpy.ndarray``.
+        ``"squeeze"``, ``"zeros"``), or any array-like value accepted by
+        ``torch.as_tensor``.
         Defaults to ``"haar"``, i.e. the `Haar transform`.
     :param resampling_kwargs:
         ``dict`` of optional, additional keyword arguments that are
@@ -456,7 +458,20 @@ class IUNet(nn.Module):
         )
 
     def get_padding(self, x: torch.Tensor):
-        """Calculates the required padding for the input."""
+        """Return the padded spatial shape and ``torch.nn.functional.pad`` spec.
+
+        The returned padding is symmetric up to one element and is ordered in
+        PyTorch's reverse spatial convention (last dimension first). No data
+        is modified; pass the result to :meth:`pad` to apply it.
+
+        Args:
+            x: Input tensor in ``(batch, channels, *spatial)`` format.
+
+        Returns:
+            A ``(padded_shape, padding)`` pair. ``padded_shape`` is a list of
+            spatial sizes and ``padding`` is a list suitable for
+            :func:`torch.nn.functional.pad`.
+        """
         shape = x.shape[2:]
         factors = self.downsampling_factors
         padded_shape = [((s + f - 1) // f) * f for (s, f) in zip(shape, factors)]
@@ -565,7 +580,12 @@ class IUNet(nn.Module):
         return tuple(factors)
 
     def pad(self, x, padded_shape=None, padding=None):
-        """Applies the chosen padding to the input, if required."""
+        """Pad ``x`` to a stride-compatible shape when necessary.
+
+        If ``padded_shape`` and ``padding`` are omitted they are computed with
+        :meth:`get_padding`. The tensor is returned unchanged when all spatial
+        dimensions are already divisible by the total downsampling factor.
+        """
         if self.padding_mode is None:
             raise AttributeError(f"padding_mode in {self} is set to None.")
 
@@ -610,19 +630,29 @@ class IUNet(nn.Module):
         return apply_reconstruction(plan, *inputs)
 
     def encode(self, x, use_padding=False):
-        """Encodes x, i.e. applies the contractive part of the iUNet."""
+        """Encode an input into one code tensor per resolution level.
+
+        Set ``use_padding=True`` to pad an input before encoding. The default
+        leaves padding management to :meth:`forward` and is useful when the
+        caller has already padded the tensor.
+        """
         if use_padding:
             x = self.pad(x)
         return self._apply_plan(self._encode_plan, x)
 
     def decode(self, *codes):
-        """Applies the expansive, i.e. decoding, portion of the iUNet."""
+        """Decode the resolution-level code tensors back to image space."""
         if len(codes) != self.num_levels:
             raise ValueError(f"decode expects {self.num_levels} code tensors.")
         return self._apply_plan(self._decode_plan, *codes)
 
     def forward(self, x: torch.Tensor):
-        """Applies the forward mapping of the iUNet to ``x``."""
+        """Apply the forward mapping to ``x``.
+
+        Inputs use ``(batch, channels, *spatial)`` layout. When padding is
+        enabled, the output is cropped back to the original spatial shape if
+        ``revert_input_padding`` is true.
+        """
         if x.ndim != self.dim + 2:
             raise ValueError(
                 f"Expected a {self.dim + 2}D tensor (batch, channels, spatial dimensions)."
@@ -643,19 +673,25 @@ class IUNet(nn.Module):
         return x
 
     def decoder_inverse(self, x, use_padding=False):
-        """Applies the inverse of the decoder portion of the iUNet."""
+        """Apply the inverse decoder and recover the encoder's code tensors."""
         if use_padding:
             x = self.pad(x)
         return self._apply_plan(self._decoder_inverse_plan, x)
 
     def encoder_inverse(self, *codes):
-        """Applies the inverse of the encoder portion of the iUNet."""
+        """Apply the inverse encoder and recover its input tensor."""
         if len(codes) != self.num_levels:
             raise ValueError(f"encoder_inverse expects {self.num_levels} code tensors.")
         return self._apply_plan(self._encoder_inverse_plan, *codes)
 
     def inverse(self, x: torch.Tensor):
-        """Applies the inverse of the iUNet to ``x``."""
+        """Apply the inverse mapping to ``x``.
+
+        For an exactly stride-compatible shape this recovers the input up to
+        floating-point error. If ``forward`` cropped padded borders, those
+        discarded values cannot be recovered; set ``revert_input_padding`` to
+        ``False`` when an exact padded-domain round trip is required.
+        """
         if x.ndim != self.dim + 2:
             raise ValueError(
                 f"Expected a {self.dim + 2}D tensor (batch, channels, spatial dimensions)."
@@ -681,15 +717,25 @@ class IUNet(nn.Module):
         return x
 
     def print_layout(self):
-        """Prints the layout of the iUNet."""
+        """Print the channel layout returned by :meth:`layout`."""
         print(self.layout())
 
     def layout(self) -> str:
-        """Return a compact text diagram of channel flow through the model."""
+        """Return a compact text diagram of channel flow through the model.
+
+        The diagram reflects the achievable channel schedule after stride
+        constraints are applied, which can differ slightly from the requested
+        ``channels`` argument.
+        """
         return print_iunet_layout(self)
 
     def load_state_dict(self, state_dict, strict=True, assign=False):
-        """Load current and 0.1 checkpoints with duplicated block aliases."""
+        """Load a checkpoint and migrate duplicated 0.1 block keys.
+
+        Older default blocks sometimes stored the same convolution under both
+        ``.F.seq.`` and ``.F.F.``. The latter is removed after being copied to
+        the current namespace when needed; all other keys retain their names.
+        """
         migrated = OrderedDict(state_dict)
         if hasattr(state_dict, "_metadata"):
             migrated._metadata = state_dict._metadata
