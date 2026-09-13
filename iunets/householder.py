@@ -1,5 +1,4 @@
 import torch
-from torch.autograd import Function
 from .utils import eye_like
 from warnings import warn
 
@@ -15,7 +14,7 @@ def householder_matrix(unit_vector):
     return eye_like(transform) - transform
 
 def normalize_matrix_rows(matrix, eps=1e-6):
-    norms = torch.sqrt(torch.sum(matrix**2, dim=-2, keepdim=True) + eps)
+    norms = torch.linalg.vector_norm(matrix, dim=-2, keepdim=True).clamp_min(eps)
     return matrix / norms
 
 def householder_transform(matrix, n_reflections=-1, eps=1e-6):

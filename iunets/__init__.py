@@ -1,5 +1,6 @@
-from .networks import iUNet
+from .networks import IUNet, iUNet
 
 __all__ = [
-    'iUNet'
+    'IUNet',
+    'iUNet',
 ]

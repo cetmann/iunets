@@ -1,37 +1,42 @@
+import math
 from warnings import warn
 from typing import Callable, Union, Iterable, Tuple
 
 import torch
 from torch import nn, Tensor
-from torch.nn.common_types import _size_1_t, _size_2_t, _size_3_t
-from torch.nn.modules.utils import _single, _pair, _triple
 import torch.nn.functional as F
-from torch.autograd import Function
-
-
-import numpy as np
 
 from .utils import get_num_channels
-from .expm import expm
-from .cayley import cayley
 from .householder import householder_transform
+
+
+def _stride_tuple(value, dim):
+    if type(value) is int:
+        value = (value,) * dim
+    elif isinstance(value, (tuple, list)):
+        value = tuple(value)
+    else:
+        raise ValueError(f"stride must be a positive integer or {dim} integers.")
+    if len(value) != dim or any(type(part) is not int or part <= 0 for part in value):
+        raise ValueError(f"stride must contain {dim} positive integers.")
+    return value
 
 
 def __calculate_kernel_matrix_exp__(weight, **kwargs):
     skew_symmetric_matrix = weight - torch.transpose(weight, -1, -2)
-    return expm.apply(skew_symmetric_matrix)
+    return torch.linalg.matrix_exp(skew_symmetric_matrix)
 
 
 def __calculate_kernel_matrix_cayley__(weight, **kwargs):
     skew_symmetric_matrix = weight - torch.transpose(weight, -1, -2)
-    return cayley.apply(skew_symmetric_matrix)
+    identity = torch.eye(weight.shape[-1], dtype=weight.dtype, device=weight.device)
+    return torch.linalg.solve(identity + skew_symmetric_matrix,
+                              identity - skew_symmetric_matrix)
 
 
 def __calculate_kernel_matrix_householder__(weight, **kwargs):
     n_reflections = kwargs.get('n_reflections', -1)
     eps = kwargs.get('eps', 1e-6)
-    weight_cols = weight.shape[-1]
-    weight = weight[..., n_reflections:]
     return householder_transform(weight, n_reflections, eps)
 
 
@@ -68,7 +73,7 @@ class OrthogonalResamplingLayer(torch.nn.Module):
                  low_channel_number: int,
                  stride: Union[int, Tuple[int, ...]],
                  method: str = 'cayley',
-                 init: Union[str, np.ndarray, torch.Tensor] = 'haar',
+                 init: Union[str, torch.Tensor] = 'haar',
                  learnable: bool = True,
                  init_kwargs: dict = None,
                  **kwargs):
@@ -77,7 +82,7 @@ class OrthogonalResamplingLayer(torch.nn.Module):
         self.low_channel_number = low_channel_number
         self.method = method
         self.stride = stride
-        self.channel_multiplier = int(np.prod(stride))
+        self.channel_multiplier = math.prod(stride)
         self.high_channel_number = self.channel_multiplier * low_channel_number
 
         if init_kwargs is None:
@@ -85,7 +90,10 @@ class OrthogonalResamplingLayer(torch.nn.Module):
         self.init_kwargs = init_kwargs
         self.kwargs = kwargs
 
-        assert (method in ['exp', 'cayley', 'householder'])
+        if type(low_channel_number) is not int or low_channel_number <= 0:
+            raise ValueError("low_channel_number must be a positive integer.")
+        if method not in ('exp', 'cayley', 'householder'):
+            raise ValueError("method must be 'exp', 'cayley', or 'householder'.")
         if method == 'exp':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_exp__
@@ -129,14 +137,14 @@ class OrthogonalResamplingLayer(torch.nn.Module):
 class InvertibleDownsampling1D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
-                 stride: _size_1_t = 2,
+                 stride: Union[int, Tuple[int, ...]] = 2,
                  method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
                  **kwargs):
-        stride = tuple(_single(stride))
-        channel_multiplier = int(np.prod(stride))
+        stride = _stride_tuple(stride, 1)
+        channel_multiplier = math.prod(stride)
         self.in_channels = in_channels
         self.out_channels = in_channels * channel_multiplier
         super(InvertibleDownsampling1D, self).__init__(
@@ -163,15 +171,17 @@ class InvertibleDownsampling1D(OrthogonalResamplingLayer):
 class InvertibleUpsampling1D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
-                 stride: _size_1_t = 2,
+                 stride: Union[int, Tuple[int, ...]] = 2,
                  method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
                  **kwargs):
-        stride = tuple(_pair(stride))
-        channel_multiplier = int(np.prod(stride))
+        stride = _stride_tuple(stride, 1)
+        channel_multiplier = math.prod(stride)
         self.in_channels = in_channels
+        if in_channels % channel_multiplier:
+            raise ValueError("in_channels must be divisible by the stride product.")
         self.out_channels = in_channels // channel_multiplier
         super(InvertibleUpsampling1D, self).__init__(
             low_channel_number=self.out_channels,
@@ -197,14 +207,14 @@ class InvertibleUpsampling1D(OrthogonalResamplingLayer):
 class InvertibleDownsampling2D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
-                 stride: _size_2_t = 2,
+                 stride: Union[int, Tuple[int, ...]] = 2,
                  method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
                  **kwargs):
-        stride = tuple(_pair(stride))
-        channel_multiplier = int(np.prod(stride))
+        stride = _stride_tuple(stride, 2)
+        channel_multiplier = math.prod(stride)
         self.in_channels = in_channels
         self.out_channels = in_channels * channel_multiplier
         super(InvertibleDownsampling2D, self).__init__(
@@ -231,15 +241,17 @@ class InvertibleDownsampling2D(OrthogonalResamplingLayer):
 class InvertibleUpsampling2D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
-                 stride: _size_2_t = 2,
+                 stride: Union[int, Tuple[int, ...]] = 2,
                  method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
                  **kwargs):
-        stride = tuple(_pair(stride))
-        channel_multiplier = int(np.prod(stride))
+        stride = _stride_tuple(stride, 2)
+        channel_multiplier = math.prod(stride)
         self.in_channels = in_channels
+        if in_channels % channel_multiplier:
+            raise ValueError("in_channels must be divisible by the stride product.")
         self.out_channels = in_channels // channel_multiplier
         super(InvertibleUpsampling2D, self).__init__(
             low_channel_number=self.out_channels,
@@ -265,14 +277,14 @@ class InvertibleUpsampling2D(OrthogonalResamplingLayer):
 class InvertibleDownsampling3D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
-                 stride: _size_3_t = 2,
+                 stride: Union[int, Tuple[int, ...]] = 2,
                  method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
                  **kwargs):
-        stride = tuple(_triple(stride))
-        channel_multiplier = int(np.prod(stride))
+        stride = _stride_tuple(stride, 3)
+        channel_multiplier = math.prod(stride)
         self.in_channels = in_channels
         self.out_channels = in_channels * channel_multiplier
         super(InvertibleDownsampling3D, self).__init__(
@@ -299,15 +311,17 @@ class InvertibleDownsampling3D(OrthogonalResamplingLayer):
 class InvertibleUpsampling3D(OrthogonalResamplingLayer):
     def __init__(self,
                  in_channels: int,
-                 stride: _size_3_t = 2,
+                 stride: Union[int, Tuple[int, ...]] = 2,
                  method: str = 'cayley',
                  init: str = 'haar',
                  learnable: bool = True,
                  *args,
                  **kwargs):
-        stride = tuple(_triple(stride))
-        channel_multiplier = int(np.prod(stride))
+        stride = _stride_tuple(stride, 3)
+        channel_multiplier = math.prod(stride)
         self.in_channels = in_channels
+        if in_channels % channel_multiplier:
+            raise ValueError("in_channels must be divisible by the stride product.")
         self.out_channels = in_channels // channel_multiplier
         super(InvertibleUpsampling3D, self).__init__(
             low_channel_number=self.out_channels,
@@ -365,9 +379,9 @@ class AdditiveCoupling(nn.Module):
     """Additive coupling layer, a basic invertible layer.
 
     By splitting the input activation :math:`x` and output activation :math:`y`
-    into two groups of channels (i.e. :math:`(x_1, x_2) \cong x` and
-    :math:`(y_1, y_2) \cong y`), `additive coupling layers` define an invertible
-    mapping :math:`x \mapsto y` via
+    into two groups of channels (i.e. :math:`(x_1, x_2) \\cong x` and
+    :math:`(y_1, y_2) \\cong y`), `additive coupling layers` define an invertible
+    mapping :math:`x \\mapsto y` via
 
     .. math::
 
@@ -447,6 +461,11 @@ class StandardBlock(nn.Module):
         self.num_in_channels = num_in_channels
         self.num_out_channels = num_out_channels
 
+        if type(depth) is not int or depth <= 0:
+            raise ValueError("depth must be a positive integer.")
+        if normalization not in ('instance', 'group', 'batch', None):
+            raise ValueError("normalization must be 'instance', 'group', 'batch', or None.")
+
         for i in range(depth):
 
             current_in_channels = max(num_in_channels, num_out_channels)
@@ -478,7 +497,8 @@ class StandardBlock(nn.Module):
             elif normalization == "group":
                 self.seq.append(
                     nn.GroupNorm(
-                        np.min(1, current_out_channels // 8),
+                        max(group for group in range(1, min(8, current_out_channels) + 1)
+                            if current_out_channels % group == 0),
                         current_out_channels,
                         affine=True)
                 )
@@ -489,9 +509,6 @@ class StandardBlock(nn.Module):
                            nn.BatchNorm3d][dim - 1]
                 self.seq.append(norm_op(current_out_channels, eps=1e-3))
 
-            else:
-                print("No normalization specified.")
-
             self.seq.append(nn.LeakyReLU(inplace=True))
 
 
@@ -499,14 +516,14 @@ class StandardBlock(nn.Module):
         # becomes the coupling becomes an identity transform (up to permutation
         # of channels)
         if zero_init:
-            torch.nn.init.zeros_(self.seq[-1].weight)
-            torch.nn.init.zeros_(self.seq[-1].bias)
+            final_conv = next(layer for layer in reversed(self.seq)
+                              if isinstance(layer, (nn.Conv1d, nn.Conv2d, nn.Conv3d)))
+            torch.nn.init.zeros_(final_conv.weight)
 
-        self.F = nn.Sequential(*self.seq)
+        self.seq = nn.Sequential(*self.seq)
 
     def forward(self, x):
-        x = self.F(x)
-        return x
+        return self.seq(x)
 
 
 
@@ -521,7 +538,7 @@ def create_standard_module(in_channels, **kwargs):
     module_index = kwargs.pop('module_index', 0)
     # For odd number of channels, this switches the roles of input and output
     # channels at every other layer, e.g. 1->2, then 2->1.
-    if np.mod(module_index, 2) == 0:
+    if module_index % 2 == 0:
         (num_F_in_channels, num_F_out_channels) = (
             num_F_out_channels, num_F_in_channels
         )
@@ -540,7 +557,7 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
                           stride : Tuple[int, ...],
                           method : str = 'cayley',
                           init : str = 'haar',
-                          dtype : str = 'float32',
+                          dtype : torch.dtype = torch.float32,
                           *args,
                           **kwargs):
     """Function which computes specific orthogonal matrices.
@@ -560,7 +577,7 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
         init : The matrix which should be represented. Should be
             'squeeze', 'pixel_shuffle', 'haar' or 'random'. 'haar' is only
             possible if ``stride`` is only 2.
-        dtype : Numpy dtype which should be used for the matrix.
+        dtype : PyTorch dtype which should be used for the matrix.
         *args: Variable length argument iterable.
         **kwargs: Arbitrary keyword arguments.
 
@@ -571,23 +588,25 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
     # Determine dimensionality of the data and the number of matrices.
     dim = len(stride)
     num_matrices = kernel_matrix_shape[0]
-    
-    # tbd: Givens, Householder, Bjork, give proper exception.
-    assert(method in ['exp', 'cayley', 'householder'])
+    if isinstance(dtype, str):
+        dtype = getattr(torch, dtype)
+    if method not in ('exp', 'cayley', 'householder'):
+        raise ValueError("method must be 'exp', 'cayley', or 'householder'.")
     if method == 'householder':
-        warn('Householder parametrization not fully implemented yet. '
-             'Only random initialization currently working.')
-        init = 'random'
-        
-    if init == 'random':
-        return torch.randn(kernel_matrix_shape).to('dtype')
+        if isinstance(init, str) and init != 'random':
+            warn("Householder resampling supports random initialization; "
+                 "using random weights.")
+            init = 'random'
+
+    if isinstance(init, str) and init == 'random':
+        return torch.randn(kernel_matrix_shape, dtype=dtype)
     
-    if init == 'haar' and set(stride) != {2}:
-        print("Initialization 'haar' only available for stride 2.")
-        print("Falling back to 'squeeze' transform...")
+    if isinstance(init, str) and init == 'haar' and set(stride) != {2}:
+        warn("Haar initialization requires stride 2 in every dimension; "
+             "using squeeze initialization.")
         init = 'squeeze'
     
-    if init == 'haar' and set(stride) == {2}:
+    if isinstance(init, str) and init == 'haar' and set(stride) == {2}:
         if method == 'exp':
             # The following matrices each parametrize the Haar transform when
             # exponentiating the skew symmetric matrix weight-weight.T
@@ -595,19 +614,17 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
             # "Computing exponentials of skew-symmetric matrices and logarithms
             # of orthogonal matrices." International Journal of Robotics and
             # Automation 18.1 (2003): 10-20.
-            p = np.pi/4
+            p = math.pi/4
             if dim == 1:
-                weight = np.array([[[0, p],
-                                    [0, 0]]],
-                                  dtype=dtype)
+                weight = torch.tensor([[[0, p],
+                                        [0, 0]]], dtype=dtype)
             if dim == 2:
-                weight = np.array([[[0, 0,  p,  p],
-                                    [0, 0, -p, -p],
-                                    [0, 0,  0,  0],
-                                    [0, 0,  0,  0]]],
-                                  dtype=dtype)
+                weight = torch.tensor([[[0, 0,  p,  p],
+                                        [0, 0, -p, -p],
+                                        [0, 0,  0,  0],
+                                        [0, 0,  0,  0]]], dtype=dtype)
             if dim == 3:
-                weight = np.array(
+                weight = torch.tensor(
                     [[[0, p, p, 0, p, 0, 0, 0],
                       [0, 0, 0, p, 0, p, 0, 0],
                       [0, 0, 0, p, 0, 0, p, 0],
@@ -618,27 +635,25 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
                       [0, 0, 0, 0, 0, 0, 0, 0]]],
                     dtype=dtype)
             
-            return torch.tensor(weight).repeat(num_matrices,1,1)
+            return weight.repeat(num_matrices,1,1)
 
         elif method == 'cayley':
             # The following matrices parametrize a Haar kernel matrix
             # when applying the Cayley transform. These can be found by
             # applying an inverse Cayley transform to a Haar kernel matrix.
             if dim == 1:
-                p = -np.sqrt(2)/(2-np.sqrt(2))
-                weight = np.array([[[0, p],
-                                    [0, 0]]],
-                                  dtype=dtype)
+                p = -math.sqrt(2)/(2-math.sqrt(2))
+                weight = torch.tensor([[[0, p],
+                                        [0, 0]]], dtype=dtype)
             if dim == 2:
                 p = .5
-                weight = np.array([[[0, 0,  p,  p],
-                                    [0, 0, -p, -p],
-                                    [0, 0,  0,  0],
-                                    [0, 0,  0,  0]]],
-                                  dtype=dtype)
+                weight = torch.tensor([[[0, 0,  p,  p],
+                                        [0, 0, -p, -p],
+                                        [0, 0,  0,  0],
+                                        [0, 0,  0,  0]]], dtype=dtype)
             if dim == 3:
-                p=1/np.sqrt(2)
-                weight = np.array(
+                p=1/math.sqrt(2)
+                weight = torch.tensor(
                     [[[0, -p, -p,  0,  -p,   0,   0, 1-p],
                       [0,  0,  0, -p,   0,  -p, p-1,   0],
                       [0,  0,  0, -p,   0, p-1,  -p,   0],
@@ -648,28 +663,30 @@ def __initialize_weight__(kernel_matrix_shape : Tuple[int, ...],
                       [0,  0,  0,  0,   0,   0,   0,  -p],
                       [0,  0,  0,  0,   0,   0,   0,   0]]],
                     dtype=dtype)
-            return torch.tensor(weight).repeat(num_matrices,1,1)
+            return weight.repeat(num_matrices,1,1)
 
-    if init in ['squeeze', 'pixel_shuffle', 'zeros']:
+    if isinstance(init, str) and init in ['squeeze', 'pixel_shuffle', 'zeros']:
         if method == 'exp' or method == 'cayley':
-            return torch.zeros(*kernel_matrix_shape)
+            return torch.zeros(*kernel_matrix_shape, dtype=dtype)
 
     # An initialization of the weight can also be explicitly provided as a
     # numpy or torch tensor. If only one matrix is provided, this matrix
     # is copied num_matrices times.
-    if type(init) is np.ndarray:
-        init = torch.tensor(init.astype(dtype))
-
-    if torch.is_tensor(init):
+    if not isinstance(init, str):
+        try:
+            init = torch.as_tensor(init, dtype=dtype)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("init must be a supported name or an array-like matrix.") from exc
         if len(init.shape) == 2:
             init = init.reshape(1, *init.shape)
         if init.shape[0] == 1:
             init = init.repeat(num_matrices,1,1)
-        assert(init.shape == kernel_matrix_shape)
+        if tuple(init.shape) != tuple(kernel_matrix_shape):
+            raise ValueError(f"init must have shape {kernel_matrix_shape}.")
         return init
 
     else:
-        raise NotImplementedError("Unknown initialization.")
+        raise ValueError(f"Unknown initialization: {init}.")
 
 
 class OrthogonalChannelMixing(nn.Module):
@@ -685,12 +702,15 @@ class OrthogonalChannelMixing(nn.Module):
         super(OrthogonalChannelMixing, self).__init__()
 
         self.in_channels = in_channels
-        self.weight = nn.Parameter(
-            torch.zeros((in_channels, in_channels)),
-            requires_grad=learnable
-        )
+        initial = (torch.randn((in_channels, in_channels))
+                   if method == 'householder'
+                   else torch.zeros((in_channels, in_channels)))
+        self.weight = nn.Parameter(initial, requires_grad=learnable)
 
-        assert (method in ['exp', 'cayley', 'householder'])
+        if type(in_channels) is not int or in_channels <= 0:
+            raise ValueError("in_channels must be a positive integer.")
+        if method not in ('exp', 'cayley', 'householder'):
+            raise ValueError("method must be 'exp', 'cayley', or 'householder'.")
         if method == 'exp':
             self.__calculate_kernel_matrix__ \
                 = __calculate_kernel_matrix_exp__

@@ -51,7 +51,7 @@ def print_iunet_layout(iunet):
             _right = outside_padding - _left
             right_padding = ''.join(['-'] * _right)
             output[i] = ''.join([left_padding, output[i], right_padding])
-        print(output[i])
+    return '\n'.join(output)
 
 
 def eye_like(M, device=None, dtype=None):
