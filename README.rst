@@ -1,17 +1,43 @@
-iUNets
-======
+===========================================
+iUNets - Fully invertible U-Nets in PyTorch
+===========================================
 
-Invertible U-Nets for PyTorch, with native inverse based gradient
-reconstruction. iUNets support 1D, 2D, and 3D tensors, learnable orthogonal
-resampling, and anisotropic strides. The project is based on `iUNets: Fully
+This library enables highly memory-efficient training of **fully invertible
+U-Nets (iUNets)** in 1D, 2D, and 3D for use cases such as segmentation of medical
+images. The project is based on `iUNets: Fully
 invertible U-Nets with Learnable Up- and Downsampling
-<https://arxiv.org/abs/2005.05220>`_.
+<https://arxiv.org/abs/2005.05220>`_ by Christian Etmann, Rihuan Ke &
+Carola-Bibiane Schönlieb.
 
 Install with ``pip install iunets`` (Python 3.10 or newer, PyTorch 2.3 or
-newer). The runtime depends on PyTorch alone; MemCNN and NumPy are not required.
+newer). The runtime depends on PyTorch alone.
 
-CPU quickstart
---------------
+Official documentation:
+`https://iunets.readthedocs.io <https://iunets.readthedocs.io>`_.
+
+By combining reversible layers (such as additive coupling layers) with
+**learnable invertible up- and downsampling operators** and suitable channel
+splitting and concatenation, the iUNet is fully bijective. This allows for
+*reconstructing* internal activations *instead of storing* them, reducing
+activation storage as block depth grows.
+
+.. figure:: img/iunet_for_segmentation.png
+
+   An iUNet used as a memory-efficient sub-network for segmenting a 3-channel
+   input into 10 classes.
+
+Features
+--------
+
+- Memory-efficient iUNets in 1D, 2D, and 3D that integrate with the PyTorch workflow.
+- Customizable reversible modules.
+- Learnable, invertible, and possibly anisotropic up- and downsampling.
+- Orthogonal channel mixing.
+- Native inverse-based gradient reconstruction.
+- Automatic padding and unpadding, as well as model layout summaries.
+
+Example usage
+-------------
 
 .. code-block:: python
 
@@ -31,13 +57,13 @@ CPU quickstart
    print(f"loss: {loss.item():.3f}")
    print(model.layout())
 
-``IUNet`` is the public class name; ``iUNet`` remains an alias. The default
+The default
 ``gradient_mode="reconstruct"`` stores encoder and decoder boundaries, then
 reconstructs internal activations during backward. This reduces activation
 storage as block depth grows, at the cost of extra computation. Use
 ``gradient_mode="autograd"`` for custom modules with stochastic behavior or
 mutable state. See the `documentation <https://iunets.readthedocs.io/>`_ for
-custom module requirements, padding, transforms, and migration from 0.1.
+custom module requirements, padding, and transforms.
 
 Development with uv
 -------------------
